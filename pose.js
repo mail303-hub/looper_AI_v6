@@ -80,7 +80,7 @@
       g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke();
     });
     // reference point of the distance measurement (mouth or nose)
-    if (lm[0] && lm[9] && lm[10]) {
+    if (lm[0] && lm[9] && lm[10] && lm[11] && lm[12]) {
       const rp = refPoint(lm);
       g.strokeStyle = 'rgba(0,200,255,0.95)'; g.lineWidth = 2;
       g.beginPath(); g.arc(r.x + rp.x * r.w, r.y + rp.y * r.h, 7, 0, Math.PI * 2); g.stroke();
@@ -105,7 +105,11 @@
     releaseSpeed: 2.0,  // draw wrist moving away from the face faster than this = RELEASE
     cooldownMs: 1500,
     lostMs: 600,        // anchor lost without a fast move for this long = let-down (no release)
-    ref: 'mouth',       // distance of the drawing hand is measured from the 'mouth' (landmarks 9/10) or the 'nose' (landmark 0)
+    hand: 'right',      // shooter's drawing hand: 'right' (draws with the right hand) or 'left'
+    ref: 'mouth',       // the drawing wrist is measured from the 'mouth' (landmarks 9/10), the 'nose' (landmark 0) or the 'shoulder' (the one opposite the drawing hand)
+    shDrawY: 0.4,       // shoulder mode: drawing wrist must be above (shoulder line + this x shoulder width); negative = above the shoulder line
+    shBowY: 0.9,        // shoulder mode: bow wrist must be above (shoulder line + this x shoulder width)
+    shoulderOffset: 0.65, // wrist-to-opposite-shoulder distances are about 1.2 shoulder widths at full draw: anchor / draw distances grow by this in 'shoulder' mode
     noseOffset: 0.15,   // the nose is higher than the mouth: anchor / draw distances grow by this (shoulder widths) in 'nose' mode
     mode: 'wrist',      // release signal: 'wrist' | 'elbow' | 'both'
     elbowSpeed: 1.5,    // drawing elbow moving faster than this (shoulder widths / s, any direction) = release
@@ -130,9 +134,10 @@
 
   // the point the drawing hand is measured from
   function refPoint(lm) {
+    if (CFG.ref === 'shoulder') { const o = lm[CFG.hand === 'left' ? 12 : 11]; return { x: o.x, y: o.y }; }   // right hand: left shoulder (11); left hand: right shoulder (12)
     return CFG.ref === 'nose' ? { x: lm[0].x, y: lm[0].y } : { x: (lm[9].x + lm[10].x) / 2, y: (lm[9].y + lm[10].y) / 2 };
   }
-  const refIdx = () => (CFG.ref === 'nose' ? [0] : [9, 10]);
+  const refIdx = () => (CFG.ref === 'shoulder' ? [] : CFG.ref === 'nose' ? [0] : [9, 10]);
 
   function detect(lm, t) {
     const vis = (i) => lm[i] && (lm[i].visibility === undefined || lm[i].visibility > 0.4);
@@ -143,10 +148,10 @@
     const sw = dist(lm[11], lm[12]);
     if (sw < 0.03) return;
     const mouth = refPoint(lm);
-    const off = CFG.ref === 'nose' ? CFG.noseOffset : 0;   // nose is higher than the mouth
+    const off = CFG.ref === 'nose' ? CFG.noseOffset : CFG.ref === 'shoulder' ? CFG.shoulderOffset : 0;   // nose is higher than the mouth
     const dL = dist(lm[15], mouth) / sw, dR = dist(lm[16], mouth) / sw;
     // the hand nearer the face is the drawing hand, the other arm holds the bow
-    const side = (det.state === 'IDLE' || !det.side) ? (dL <= dR ? 'L' : 'R') : det.side;
+    const side = CFG.hand === 'left' ? 'L' : 'R';   // the drawing hand is set in Settings (right hand = right wrist)
     const d = side === 'L' ? dL : dR;
     const bowAng = side === 'L' ? angle(lm[12], lm[14], lm[16]) : angle(lm[11], lm[13], lm[15]);
     let v = 0;
@@ -163,20 +168,23 @@
     } else { det.prevE = null; det.eV = 0; }
     det.prevD = d; det.prevT = t;
     const straight = bowAng >= CFG.bowAngle;
+    // shoulder mode has no face anchor: a resting pose must not count, so both wrists must be raised (draw wrist above the shoulder line, bow wrist near it)
+    const sy = (lm[11].y + lm[12].y) / 2;
+    const heightOk = CFG.ref !== 'shoulder' || (((side === 'L' ? lm[15].y : lm[16].y) - sy) / sw < CFG.shDrawY && ((side === 'L' ? lm[16].y : lm[15].y) - sy) / sw < CFG.shBowY);
 
     switch (det.state) {
       case 'IDLE':
-        if (t >= det.flashUntil + CFG.cooldownMs - 400 && straight && d < CFG.drawDist + off) { det.side = side; setState('DRAW', t); }
+        if (t >= det.flashUntil + CFG.cooldownMs - 400 && straight && heightOk && d < CFG.drawDist + off) { det.side = side; setState('DRAW', t); }
         break;
       case 'DRAW':
-        if (!straight || d > CFG.drawDist + off + 0.3) { setState('IDLE', t); det.side = null; }
+        if (!straight || !heightOk || d > CFG.drawDist + off + 0.3) { setState('IDLE', t); det.side = null; }
         else if (d < CFG.anchorDist + off && Math.abs(det.vS) < CFG.steadySpeed) {
           if (t - det.since >= CFG.holdMs) { setState('FULL_DRAW', t); emit('full_draw', t); det.lostSince = 0; }
         } else det.since = t; // not anchored/steady yet: restart the hold timer
         break;
       case 'FULL_DRAW':
         if (releaseNow(d, off)) { emit('release', t); setState('IDLE', t); det.side = null; }
-        else if (d > CFG.anchorDist + off + 0.15 || !straight) {
+        else if (d > CFG.anchorDist + off + 0.15 || !straight || !heightOk) {
           if (!det.lostSince) det.lostSince = t;
           if (t - det.lostSince > CFG.lostMs) { setState('IDLE', t); det.side = null; } // let-down
         } else det.lostSince = 0;

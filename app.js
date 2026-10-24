@@ -75,7 +75,7 @@
     offsetMs: 0,
     prefs: { buf: 2, split: 0.5, cam: null, zoomOn: false, gridOn: false, gridSize: 100, gridInt: 5, gridColor: 'white', auto: false, orient: 'landscape', input: 'mic', slomoFps: SLOMO_DEFAULT, btName: BT_DEFAULT_NAME, fps: FPS_DEFAULT,
       room: '', mqttUrl: Phone.DEFAULT_URL, sndRoom: '', motionThr: MOTION_DEFAULT, sensorThr: MOTION_DEFAULT,
-      poseOn: false, poseLog: false, aiMode: 'wrist', aiThr: 2.0, aiRef: 'mouth' },
+      poseOn: false, poseLog: false, aiMode: 'wrist', aiThr: 2.0, aiRef: 'mouth', aiHand: 'right' },
     ai: { lastSig: 0 },   // AI_trig (pose) signal lockout, same role as S.bt / S.ph
     zoom: { s: 1, tx: 0, ty: 0 },
     cams: [], camId: null,
@@ -162,6 +162,7 @@
     const c = Pose.config, p = S.prefs;
     c.mode = p.aiMode;
     c.ref = p.aiRef;
+    c.hand = p.aiHand;
     c.releaseSpeed = p.aiThr;
     c.elbowSpeed = Math.round(p.aiThr * 75) / 100;   // elbow: 75 % of the wrist threshold
     c.interval = p.input === 'ai' ? 33 : 66;          // the release movement is short: sample faster in AI_trig mode
@@ -251,7 +252,8 @@
         d.poseLog = !!p.poseLog;
         d.aiMode = p.aiMode === 'elbow' || p.aiMode === 'both' ? p.aiMode : 'wrist';
         if (isFinite(p.aiThr)) d.aiThr = Core.clamp(Math.round(p.aiThr * 10) / 10, 0.5, 4);
-        d.aiRef = p.aiRef === 'nose' ? 'nose' : 'mouth';
+        d.aiRef = p.aiRef === 'nose' || p.aiRef === 'shoulder' ? p.aiRef : 'mouth';
+        d.aiHand = p.aiHand === 'left' ? 'left' : 'right';
         if (typeof p.room === 'string') d.room = Phone.cleanRoom(p.room);
         if (typeof p.mqttUrl === 'string' && p.mqttUrl.trim()) d.mqttUrl = p.mqttUrl.trim().slice(0, 200);
         if (typeof p.sndRoom === 'string') d.sndRoom = Phone.cleanRoom(p.sndRoom);
@@ -319,7 +321,8 @@
     $('pose-on').checked = p.poseOn;
     $('pose-log-on').checked = p.poseLog;
     ['wrist', 'elbow', 'both'].forEach((m) => $('ai-m-' + m).classList.toggle('sel', p.aiMode === m));
-    ['mouth', 'nose'].forEach((m) => $('ai-r-' + m).classList.toggle('sel', p.aiRef === m));
+    ['mouth', 'nose', 'shoulder'].forEach((m) => $('ai-r-' + m).classList.toggle('sel', p.aiRef === m));
+    ['right', 'left'].forEach((m) => $('ai-h-' + m).classList.toggle('sel', p.aiHand === m));
     $('ai-thr').value = String(p.aiThr);
     $('ai-thr-text').textContent = p.aiThr.toFixed(1);
     if (Pose) { Pose.setLogging(p.poseLog); $('pose-log-info').textContent = p.poseLog ? 'Log: recording, ' + Pose.logInfo() + '.' : 'Log: off (' + Pose.logInfo() + ' kept).'; }
@@ -2414,7 +2417,8 @@
     // pose estimation / AI_trig
     $('pose-on').addEventListener('change', (e) => { S.prefs.poseOn = !!e.target.checked; savePrefs(); applyPose(); refreshSettingsUi(); log('pose overlay', S.prefs.poseOn ? 'on' : 'off'); });
     ['wrist', 'elbow', 'both'].forEach((m) => $('ai-m-' + m).addEventListener('click', () => { S.prefs.aiMode = m; savePrefs(); applyPoseConfig(); refreshSettingsUi(); log('AI release from', m); }));
-    ['mouth', 'nose'].forEach((m) => $('ai-r-' + m).addEventListener('click', () => { S.prefs.aiRef = m; savePrefs(); applyPoseConfig(); refreshSettingsUi(); log('AI distance measured from', m); }));
+    ['right', 'left'].forEach((m) => $('ai-h-' + m).addEventListener('click', () => { S.prefs.aiHand = m; savePrefs(); applyPoseConfig(); refreshSettingsUi(); log('AI shooter', m + ' hand'); }));
+    ['mouth', 'nose', 'shoulder'].forEach((m) => $('ai-r-' + m).addEventListener('click', () => { S.prefs.aiRef = m; savePrefs(); applyPoseConfig(); refreshSettingsUi(); log('AI distance measured from', m); }));
     $('ai-thr').addEventListener('input', (e) => { S.prefs.aiThr = Core.clamp(Math.round((parseFloat(e.target.value) || 2) * 10) / 10, 0.5, 4); savePrefs(); applyPoseConfig(); refreshSettingsUi(); });
     $('pose-log-on').addEventListener('change', (e) => { S.prefs.poseLog = !!e.target.checked; savePrefs(); refreshSettingsUi(); log('pose log', S.prefs.poseLog ? 'on' : 'off'); });
     $('btn-pose-clear').addEventListener('click', () => { Pose.clearLog(); refreshSettingsUi(); });
