@@ -7,9 +7,8 @@
   'use strict';
   const N = 48;              // the circle area is reduced to N x N pixels
   const BS = 6;              // block size in pixels (N x N picture -> 8 x 8 blocks)
-  const RX = 16, RY = 10;     // search range of the block matching: horizontal / vertical, px
-  const MINSHIFT = 3;        // a block counts when it is matched at least this far sideways (px of N = share of the circle diameter) per ~2 frames
-  const T0 = 0.35;           // a block counts as changed when its normalised difference is above this
+  const RX = 22, RY = 10;     // search range of the block matching: horizontal / vertical, px
+    const T0 = 0.35;           // a block counts as changed when its normalised difference is above this
   const FLOOR = 4;           // minimum texture (grey levels) used for normalising, so flat noisy blocks are not amplified
   const CALM_FROM = 600;     // baseline window: from 600 ms ... to 150 ms before now
   const CALM_TO = 150;
@@ -17,7 +16,7 @@
   const CALM_FACTOR = 0.5;   // the earlier level must be below this share of the current change (a sudden jump)
 
   const region = { cx: 0.5, cy: 0.5, r: 0.12, set: false };   // cx, cy: share of the video picture; r: share of its shorter side
-  const cfg = { thr: 12, ang: 35 };   // thr: % of circle area moving; ang: allowed tilt of the motion from horizontal, degrees                                     // threshold: % of the circle area that changed
+  const cfg = { thr: 12, ang: 35, spd: 2 };   // thr: % of circle area moving; ang: allowed tilt of the motion from horizontal, degrees; spd: minimum speed in circle diameters per second                                     // threshold: % of the circle area that changed
   let video = null, canvas = null, g2 = null;
   let running = false, token = 0, rvfc = 0, timer = 0;
   let frames = [], vals = [];
@@ -62,6 +61,9 @@
       return o;
     };
     const diff = (p, q) => { let s = 0; for (let i = 0; i < p.length; i++) s += Math.abs(p[i] - q[i]); return s / p.length; };
+    // minimum shift in px that corresponds to the chosen speed (time between the two averaged frame pairs)
+    const gap = ((frames[L - 1].t + frames[L - 2].t) - (frames[L - 3].t + frames[L - 4].t)) / 2000;
+    const MINSHIFT = Math.max(2, cfg.spd * Math.max(gap, 0.02) * N);
     const cacheB = new Map();
     const normB = (x, y) => { const k = y * N + x; let r = cacheB.get(k); if (!r) { r = norm(B, x, y); cacheB.set(k, r); } return r; };
     let total = 0, moving = 0;

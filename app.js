@@ -77,7 +77,7 @@
     prefs: { buf: 2, split: 0.5, cam: null, zoomOn: false, gridOn: false, gridSize: 100, gridInt: 5, gridColor: 'white', auto: false, orient: 'landscape', input: 'mic', slomoFps: SLOMO_DEFAULT, btName: BT_DEFAULT_NAME, fps: FPS_DEFAULT,
       room: '', mqttUrl: Phone.DEFAULT_URL, sndRoom: '', motionThr: MOTION_DEFAULT, sensorThr: MOTION_DEFAULT,
       poseOn: false, poseLog: false, aiThr: 2.0, aiHand: 'right',
-      motThr: 12, motAng: 35, motR: 0.12, motCx: null, motCy: null },   // MOT: change threshold (% in ~50 ms), circle size / centre (share of the camera picture)
+      motThr: 12, motAng: 35, motSpd: 2, motR: 0.12, motCx: null, motCy: null },   // MOT: change threshold (% in ~50 ms), circle size / centre (share of the camera picture)
     mot: { lastSig: 0 },  // MOT (motion circle) signal lockout
     motPlacing: false,
     ai: { lastSig: 0 },   // AI_trig (pose) signal lockout, same role as S.bt / S.ph
@@ -199,6 +199,7 @@
     if (!Motion) return;
     Motion.config.thr = S.prefs.motThr;
     Motion.config.ang = S.prefs.motAng;
+    Motion.config.spd = S.prefs.motSpd;
     if (motRegionSet()) Motion.setRegion(S.prefs.motCx, S.prefs.motCy, S.prefs.motR); else Motion.clearRegion();
   }
 
@@ -322,6 +323,7 @@
         if (isFinite(p.aiThr)) d.aiThr = Core.clamp(Math.round(p.aiThr * 10) / 10, 0.5, 4);
         d.aiHand = p.aiHand === 'left' ? 'left' : 'right';
         if (isFinite(p.motThr)) d.motThr = Core.clamp(Math.round(p.motThr * 2) / 2, 1, 40);
+        if (isFinite(p.motSpd)) d.motSpd = Core.clamp(Math.round(p.motSpd * 2) / 2, 0.5, 10);
         if (isFinite(p.motAng)) d.motAng = Core.clamp(Math.round(p.motAng / 5) * 5, 5, 80);
         if (isFinite(p.motR)) d.motR = Core.clamp(Math.round(p.motR * 100) / 100, 0.04, 0.30);
         if (isFinite(p.motCx) && isFinite(p.motCy) && p.motCx !== null && p.motCy !== null) { d.motCx = Core.clamp(p.motCx, 0, 1); d.motCy = Core.clamp(p.motCy, 0, 1); }
@@ -396,6 +398,8 @@
     ['right', 'left'].forEach((m) => $('ai-h-' + m).classList.toggle('sel', p.aiHand === m));
     $('mot-thr').value = String(p.motThr);
     $('mot-thr-text').textContent = p.motThr.toFixed(1) + ' %';
+    $('mot-spd').value = String(p.motSpd);
+    $('mot-spd-text').textContent = p.motSpd.toFixed(1);
     $('mot-ang').value = String(p.motAng);
     $('mot-ang-text').textContent = p.motAng + '°';
     $('mot-r').value = String(Math.round(p.motR * 100));
@@ -2503,6 +2507,7 @@
     $('btn-mot-place').addEventListener('click', () => setMotPlacing(!S.motPlacing));
     $('mot-place').addEventListener('pointerup', (e) => { e.preventDefault(); placeMotCircle(e.clientX, e.clientY); });
     $('mot-thr').addEventListener('input', (e) => { S.prefs.motThr = Core.clamp(Math.round((parseFloat(e.target.value) || 12) * 2) / 2, 1, 40); savePrefs(); if (Motion) Motion.config.thr = S.prefs.motThr; refreshSettingsUi(); });
+    $('mot-spd').addEventListener('input', (e) => { S.prefs.motSpd = Core.clamp(Math.round((parseFloat(e.target.value) || 2) * 2) / 2, 0.5, 10); savePrefs(); if (Motion) Motion.config.spd = S.prefs.motSpd; refreshSettingsUi(); });
     $('mot-ang').addEventListener('input', (e) => { S.prefs.motAng = Core.clamp(Math.round((parseFloat(e.target.value) || 35) / 5) * 5, 5, 80); savePrefs(); if (Motion) Motion.config.ang = S.prefs.motAng; refreshSettingsUi(); });
     $('mot-r').addEventListener('input', (e) => { S.prefs.motR = Core.clamp((parseFloat(e.target.value) || 12) / 100, 0.04, 0.30); savePrefs(); syncMotRegion(); updateMotUi(); refreshSettingsUi(); });
     $('btn-mot-clear').addEventListener('click', () => { S.prefs.motCx = null; S.prefs.motCy = null; savePrefs(); syncMotRegion(); applyMotion(); updateMotUi(); refreshSettingsUi(); updateStatus(); log('motion circle removed'); });
