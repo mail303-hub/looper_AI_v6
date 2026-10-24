@@ -79,11 +79,35 @@
       if (a.v < 0.4 || b.v < 0.4) return;
       g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke();
     });
-    // reference point of the distance measurement (mouth or nose)
+    // face points the model finds: nose (0) and mouth corners (9, 10)
+    g.fillStyle = 'rgba(0,200,255,0.85)';
+    [0, 9, 10].forEach((i) => {
+      if (!lm[i]) return;
+      const p = P(i);
+      if (p.v < 0.4) return;
+      g.beginPath(); g.arc(p.x, p.y, 4.5, 0, Math.PI * 2); g.fill();
+    });
+    // the point the distance is measured from: ring + label, and a line to the drawing wrist with the distance
     if (lm[0] && lm[9] && lm[10] && lm[11] && lm[12]) {
       const rp = refPoint(lm);
-      g.strokeStyle = 'rgba(0,200,255,0.95)'; g.lineWidth = 2;
-      g.beginPath(); g.arc(r.x + rp.x * r.w, r.y + rp.y * r.h, 7, 0, Math.PI * 2); g.stroke();
+      const rx = r.x + rp.x * r.w, ry = r.y + rp.y * r.h;
+      const wi = CFG.hand === 'left' ? 15 : 16;
+      const wp = P(wi);
+      const sw = dist(lm[11], lm[12]);
+      g.strokeStyle = 'rgba(0,200,255,0.95)'; g.lineWidth = 2.5;
+      g.beginPath(); g.arc(rx, ry, 10, 0, Math.PI * 2); g.stroke();
+      if (wp.v >= 0.4 && sw > 0.03) {
+        g.save(); g.setLineDash([6, 5]); g.lineWidth = 2;
+        g.beginPath(); g.moveTo(wp.x, wp.y); g.lineTo(rx, ry); g.stroke(); g.restore();
+        g.font = '600 14px system-ui, sans-serif'; g.textAlign = 'center'; g.fillStyle = 'rgba(0,200,255,1)';
+        const dTxt = (dist(lm[wi], rp) / sw).toFixed(2), dx = (wp.x + rx) / 2 + 14, dy = (wp.y + ry) / 2;
+        g.lineWidth = 3.5; g.strokeStyle = 'rgba(0,0,0,0.75)'; g.strokeText(dTxt, dx, dy);
+        g.fillText(dTxt, dx, dy);
+      }
+      g.font = '600 13px system-ui, sans-serif'; g.textAlign = 'left'; g.fillStyle = 'rgba(0,200,255,1)';
+      const lbl = CFG.ref === 'nose' ? 'NOSE' : CFG.ref === 'shoulder' ? (CFG.hand === 'left' ? 'R SHOULDER' : 'L SHOULDER') : 'MOUTH';
+      g.lineWidth = 3.5; g.strokeStyle = 'rgba(0,0,0,0.75)'; g.strokeText(lbl, rx + 14, ry - 8);
+      g.fillText(lbl, rx + 14, ry - 8);
     }
     g.fillStyle = 'rgba(255,214,10,0.95)';
     POINTS.forEach((i) => {
@@ -286,6 +310,7 @@
     ready: () => !!landmarker, error: () => lastErr,
     setOverlay: (on) => { overlay = !!on; if (canvas) { if (!overlay) { clear(); canvas.classList.add('hidden'); } else if (running) canvas.classList.remove('hidden'); } }, config: CFG, state: () => det.state,
     setLogging, clearLog, mark, exportLog, logInfo,
+    drawFrame: (lm) => draw(lm),     // draw one frame of landmarks (tests)
     feed: (lm, t) => detect(lm, t)   // replay a recorded log / unit tests
   };
 })();
