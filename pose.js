@@ -9,8 +9,8 @@
   const LIB = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@' + VER + '/vision_bundle.mjs';
   const MODEL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task';
   // MediaPipe landmark indexes: 11/12 shoulders, 13/14 elbows, 15/16 wrists, 23/24 hips
-  const POINTS = [11, 12, 13, 14, 15, 16, 23, 24];
-  const LINES = [[11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [11, 23], [12, 24], [23, 24]];
+  const POINTS = [11, 12, 13, 14, 15, 16];   // hips are not drawn
+  const LINES = [[11, 12], [11, 13], [13, 15], [12, 14], [14, 16]];
 
   let landmarker = null, loading = null, failed = false;
   let video = null, canvas = null, onStatus = null;
@@ -79,6 +79,12 @@
       if (a.v < 0.4 || b.v < 0.4) return;
       g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke();
     });
+    // reference point of the distance measurement (mouth or nose)
+    if (lm[0] && lm[9] && lm[10]) {
+      const rp = refPoint(lm);
+      g.strokeStyle = 'rgba(0,200,255,0.95)'; g.lineWidth = 2;
+      g.beginPath(); g.arc(r.x + rp.x * r.w, r.y + rp.y * r.h, 7, 0, Math.PI * 2); g.stroke();
+    }
     g.fillStyle = 'rgba(255,214,10,0.95)';
     POINTS.forEach((i) => {
       const p = P(i);
@@ -99,6 +105,8 @@
     releaseSpeed: 2.0,  // draw wrist moving away from the face faster than this = RELEASE
     cooldownMs: 1500,
     lostMs: 600,        // anchor lost without a fast move for this long = let-down (no release)
+    ref: 'mouth',       // distance of the drawing hand is measured from the 'mouth' (landmarks 9/10) or the 'nose' (landmark 0)
+    noseOffset: 0.15,   // the nose is higher than the mouth: anchor / draw distances grow by this (shoulder widths) in 'nose' mode
     mode: 'wrist',      // release signal: 'wrist' | 'elbow' | 'both'
     elbowSpeed: 1.5,    // drawing elbow moving faster than this (shoulder widths / s, any direction) = release
     interval: 66        // ms between detections (about 15 / s); AI_trig uses 33 for the short release movement
@@ -120,15 +128,22 @@
     try { if (onEvent) onEvent({ type, t }); } catch (e) { /* ignore */ }
   }
 
+  // the point the drawing hand is measured from
+  function refPoint(lm) {
+    return CFG.ref === 'nose' ? { x: lm[0].x, y: lm[0].y } : { x: (lm[9].x + lm[10].x) / 2, y: (lm[9].y + lm[10].y) / 2 };
+  }
+  const refIdx = () => (CFG.ref === 'nose' ? [0] : [9, 10]);
+
   function detect(lm, t) {
     const vis = (i) => lm[i] && (lm[i].visibility === undefined || lm[i].visibility > 0.4);
-    if (![0, 9, 10, 11, 12, 13, 14, 15, 16].every(vis)) {
+    if (![...refIdx(), 11, 12, 13, 14, 15, 16].every(vis)) {
       if (det.state !== 'IDLE' && t - det.since > CFG.lostMs) setState('IDLE', t);
       det.prevD = null; det.prevE = null; return;
     }
     const sw = dist(lm[11], lm[12]);
     if (sw < 0.03) return;
-    const mouth = { x: (lm[9].x + lm[10].x) / 2, y: (lm[9].y + lm[10].y) / 2 };
+    const mouth = refPoint(lm);
+    const off = CFG.ref === 'nose' ? CFG.noseOffset : 0;   // nose is higher than the mouth
     const dL = dist(lm[15], mouth) / sw, dR = dist(lm[16], mouth) / sw;
     // the hand nearer the face is the drawing hand, the other arm holds the bow
     const side = (det.state === 'IDLE' || !det.side) ? (dL <= dR ? 'L' : 'R') : det.side;
@@ -151,17 +166,17 @@
 
     switch (det.state) {
       case 'IDLE':
-        if (t >= det.flashUntil + CFG.cooldownMs - 400 && straight && d < CFG.drawDist) { det.side = side; setState('DRAW', t); }
+        if (t >= det.flashUntil + CFG.cooldownMs - 400 && straight && d < CFG.drawDist + off) { det.side = side; setState('DRAW', t); }
         break;
       case 'DRAW':
-        if (!straight || d > CFG.drawDist + 0.3) { setState('IDLE', t); det.side = null; }
-        else if (d < CFG.anchorDist && Math.abs(det.vS) < CFG.steadySpeed) {
+        if (!straight || d > CFG.drawDist + off + 0.3) { setState('IDLE', t); det.side = null; }
+        else if (d < CFG.anchorDist + off && Math.abs(det.vS) < CFG.steadySpeed) {
           if (t - det.since >= CFG.holdMs) { setState('FULL_DRAW', t); emit('full_draw', t); det.lostSince = 0; }
         } else det.since = t; // not anchored/steady yet: restart the hold timer
         break;
       case 'FULL_DRAW':
-        if (releaseNow(d)) { emit('release', t); setState('IDLE', t); det.side = null; }
-        else if (d > CFG.anchorDist + 0.15 || !straight) {
+        if (releaseNow(d, off)) { emit('release', t); setState('IDLE', t); det.side = null; }
+        else if (d > CFG.anchorDist + off + 0.15 || !straight) {
           if (!det.lostSince) det.lostSince = t;
           if (t - det.lostSince > CFG.lostMs) { setState('IDLE', t); det.side = null; } // let-down
         } else det.lostSince = 0;
@@ -169,8 +184,8 @@
     }
   }
 
-  function releaseNow(d) {
-    const wristFast = det.vS > CFG.releaseSpeed && d > CFG.anchorDist * 0.8;
+  function releaseNow(d, off) {
+    const wristFast = det.vS > CFG.releaseSpeed && d > (CFG.anchorDist + off) * 0.8;
     const elbowFast = det.eV > CFG.elbowSpeed;
     return CFG.mode === 'elbow' ? elbowFast : CFG.mode === 'both' ? (wristFast && elbowFast) : wristFast;
   }
