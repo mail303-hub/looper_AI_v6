@@ -22,6 +22,7 @@
   const Mp4 = self.DDMp4;
   const Phone = self.DDPhone;
   const Pose = self.DDPose;
+  const Motion = self.DDMotion;
   const $ = (id) => document.getElementById(id);
 
   // ---- constants -----------------------------------------------------------
@@ -75,7 +76,10 @@
     offsetMs: 0,
     prefs: { buf: 2, split: 0.5, cam: null, zoomOn: false, gridOn: false, gridSize: 100, gridInt: 5, gridColor: 'white', auto: false, orient: 'landscape', input: 'mic', slomoFps: SLOMO_DEFAULT, btName: BT_DEFAULT_NAME, fps: FPS_DEFAULT,
       room: '', mqttUrl: Phone.DEFAULT_URL, sndRoom: '', motionThr: MOTION_DEFAULT, sensorThr: MOTION_DEFAULT,
-      poseOn: false, poseLog: false, aiMode: 'wrist', aiThr: 2.0, aiRef: 'mouth', aiHand: 'right' },
+      poseOn: false, poseLog: false, aiThr: 2.0, aiHand: 'right',
+      motThr: 12, motR: 0.12, motCx: null, motCy: null },   // MOT: change threshold (% in ~50 ms), circle size / centre (share of the camera picture)
+    mot: { lastSig: 0 },  // MOT (motion circle) signal lockout
+    motPlacing: false,
     ai: { lastSig: 0 },   // AI_trig (pose) signal lockout, same role as S.bt / S.ph
     zoom: { s: 1, tx: 0, ty: 0 },
     cams: [], camId: null,
@@ -154,17 +158,16 @@
     applyGrid();
     updateStatus();
     applyPose();
+    applyMotion();
+    updateMotUi();
   }
 
   // ---- pose estimation / AI_trig ---------------------------------------------
   function applyPoseConfig() {
     if (!Pose) return;
     const c = Pose.config, p = S.prefs;
-    c.mode = p.aiMode;
-    c.ref = p.aiRef;
     c.hand = p.aiHand;
     c.releaseSpeed = p.aiThr;
-    c.elbowSpeed = Math.round(p.aiThr * 75) / 100;   // elbow: 75 % of the wrist threshold
     c.interval = p.input === 'ai' ? 33 : 66;          // the release movement is short: sample faster in AI_trig mode
   }
 
@@ -181,6 +184,69 @@
     else if (!want) $('pose-info').textContent = (S.prefs.poseOn || ai) ? 'On (runs on the live view).' : 'Off.';
   }
 
+  // ---- MOT: motion circle trigger -----------------------------------------------
+  // the camera picture is shown with object-fit: contain, find the rectangle it really occupies on the screen
+  function videoRectScreen() {
+    const W = window.innerWidth || 1, H = window.innerHeight || 1;
+    const vw = S.live.videoWidth || W, vh = S.live.videoHeight || H;
+    const s = Math.min(W / vw, H / vh);
+    return { x: (W - vw * s) / 2, y: (H - vh * s) / 2, w: vw * s, h: vh * s, vw, vh };
+  }
+
+  function motRegionSet() { return S.prefs.motCx !== null && S.prefs.motCy !== null; }
+
+  function syncMotRegion() {
+    if (!Motion) return;
+    Motion.config.thr = S.prefs.motThr;
+    if (motRegionSet()) Motion.setRegion(S.prefs.motCx, S.prefs.motCy, S.prefs.motR); else Motion.clearRegion();
+  }
+
+  // the bluish circle on the screen (60 % transparent) and the icon under the gear
+  function updateMotUi() {
+    const mot = S.prefs.input === 'mot';
+    const live = S.mode === 'live' || S.mode === 'pending';
+    show('btn-mot-place', mot && S.mode === 'live');
+    show('mot-place', mot && S.mode === 'live' && S.motPlacing);
+    const el = $('mot-circle');
+    const showIt = mot && live && motRegionSet();
+    el.classList.toggle('hidden', !showIt);
+    if (!showIt) return;
+    const r = videoRectScreen();
+    const rad = S.prefs.motR * Math.min(r.vw, r.vh) * (r.w / r.vw);
+    el.style.width = el.style.height = (rad * 2) + 'px';
+    el.style.left = (r.x + S.prefs.motCx * r.w - rad) + 'px';
+    el.style.top = (r.y + S.prefs.motCy * r.h - rad) + 'px';
+  }
+
+  // motion runs on the live view and also while a clip plays (AUTO MODE accepts signals then)
+  function applyMotion() {
+    if (!Motion) return;
+    const want = S.prefs.input === 'mot' && S.running && motRegionSet() && (S.mode === 'live' || S.mode === 'pending' || S.mode === 'playback');
+    if (want) { syncMotRegion(); if (!Motion.isRunning()) Motion.start(S.live); }
+    else if (Motion.isRunning()) Motion.stop();
+  }
+
+  function setMotPlacing(on) {
+    S.motPlacing = !!on && S.prefs.input === 'mot' && S.mode === 'live';
+    updateMotUi();
+    updateStatus();
+  }
+
+  // tap on the screen = centre of the sensitive circle
+  function placeMotCircle(clientX, clientY) {
+    const r = videoRectScreen();
+    S.prefs.motCx = Core.clamp((clientX - r.x) / r.w, 0, 1);
+    S.prefs.motCy = Core.clamp((clientY - r.y) / r.h, 0, 1);
+    savePrefs();
+    S.motPlacing = false;
+    syncMotRegion();
+    applyMotion();
+    updateMotUi();
+    refreshSettingsUi();
+    updateStatus();
+    log('motion circle', S.prefs.motCx.toFixed(3), S.prefs.motCy.toFixed(3), 'r', S.prefs.motR);
+  }
+
   function updateStatus() {
     const el = $('status');
     let txt = '', rec = false;
@@ -189,6 +255,7 @@
       else if (S.switching) txt = 'SWITCHING CAMERA';
       else if (S.prefs.input === 'bt' && S.bt.state !== 'connected') txt = S.bt.state === 'connecting' ? 'BT CONNECTING' : (S.bt.state === 'lost' ? 'BT RECONNECTING' : 'BT NOT CONNECTED');
       else if (S.prefs.input === 'phone' && S.ph.state !== 'connected') txt = S.ph.state === 'connecting' ? 'PHONE CONNECTING' : (S.ph.state === 'lost' ? 'PHONE RECONNECTING' : 'PHONE NOT CONNECTED');
+      else if (S.prefs.input === 'mot' && S.prefs.motCx === null) txt = S.motPlacing ? 'TAP WHERE THE CIRCLE SHOULD BE' : 'MOT: PLACE THE CIRCLE (blue icon)';
       else if (S.prefs.input === 'ai' && Pose && !Pose.ready()) txt = Pose.error() ? 'AI MODEL ERROR' : 'AI LOADING';
       else if (S.prefs.input === 'mic' && !S.micOk) txt = 'MIC OFF';
       else if (S.lastFrameAt && performance.now() - S.lastFrameAt > 3000) txt = 'NO CAMERA FRAMES';
@@ -215,10 +282,11 @@
     const ph = S.prefs.input === 'phone';
     const ai = S.prefs.input === 'ai';
     const aiOk = ai && Pose && Pose.ready();
+    const mo = S.prefs.input === 'mot';
     const src = $('src-text');
-    src.textContent = ai ? (aiOk ? 'AI' : 'AI ✕') : bt ? (S.bt.state === 'connected' ? 'BT' : 'BT ✕') : ph ? (S.ph.state === 'connected' ? 'PHONE' : 'PHONE ✕') : 'MIC';
-    src.className = ai ? (aiOk ? 'good' : 'bad') : bt ? (S.bt.state === 'connected' ? 'good' : 'bad') : ph ? (S.ph.state === 'connected' ? 'good' : 'bad') : '';
-    $('bat-text').textContent = ai ? (aiOk ? Pose.state().replace('_', ' ') : '') : bt && S.bt.battery !== null ? 'bat ' + S.bt.battery + '%' : ph ? 'ROOM ' + S.prefs.room + (S.ph.lastPeak !== null ? ' · peak ' + S.ph.lastPeak.toFixed(1) : '') : '';
+    src.textContent = mo ? (S.prefs.motCx !== null ? 'MOT' : 'MOT ✕') : ai ? (aiOk ? 'AI' : 'AI ✕') : bt ? (S.bt.state === 'connected' ? 'BT' : 'BT ✕') : ph ? (S.ph.state === 'connected' ? 'PHONE' : 'PHONE ✕') : 'MIC';
+    src.className = mo ? (S.prefs.motCx !== null ? 'good' : 'bad') : ai ? (aiOk ? 'good' : 'bad') : bt ? (S.bt.state === 'connected' ? 'good' : 'bad') : ph ? (S.ph.state === 'connected' ? 'good' : 'bad') : '';
+    $('bat-text').textContent = mo ? '' : ai ? (aiOk ? Pose.state().replace('_', ' ') : '') : bt && S.bt.battery !== null ? 'bat ' + S.bt.battery + '%' : ph ? 'ROOM ' + S.prefs.room + (S.ph.lastPeak !== null ? ' · peak ' + S.ph.lastPeak.toFixed(1) : '') : '';
     const hb = $('btn-bt-hud');
     if (hb) show('btn-bt-hud', bt && S.mode === 'live' && S.bt.state !== 'connected' && S.bt.state !== 'connecting');
   }
@@ -247,13 +315,14 @@
         if (isFinite(p.slomoFps)) d.slomoFps = Core.clamp(Math.round(p.slomoFps), SLOMO_MIN, SLOMO_MAX);
         if (typeof p.btName === 'string' && p.btName.trim()) d.btName = p.btName.trim().slice(0, 32);
         d.fps = p.fps === 60 ? 60 : 30;
-        d.input = p.input === 'bt' && btSupported() ? 'bt' : p.input === 'phone' ? 'phone' : p.input === 'ai' ? 'ai' : 'mic';
+        d.input = p.input === 'bt' && btSupported() ? 'bt' : p.input === 'phone' ? 'phone' : p.input === 'ai' ? 'ai' : p.input === 'mot' ? 'mot' : 'mic';
         d.poseOn = !!p.poseOn;
         d.poseLog = !!p.poseLog;
-        d.aiMode = p.aiMode === 'elbow' || p.aiMode === 'both' ? p.aiMode : 'wrist';
         if (isFinite(p.aiThr)) d.aiThr = Core.clamp(Math.round(p.aiThr * 10) / 10, 0.5, 4);
-        d.aiRef = p.aiRef === 'nose' || p.aiRef === 'ear' || p.aiRef === 'shoulder' ? p.aiRef : 'mouth';
         d.aiHand = p.aiHand === 'left' ? 'left' : 'right';
+        if (isFinite(p.motThr)) d.motThr = Core.clamp(Math.round(p.motThr * 2) / 2, 1, 40);
+        if (isFinite(p.motR)) d.motR = Core.clamp(Math.round(p.motR * 100) / 100, 0.04, 0.30);
+        if (isFinite(p.motCx) && isFinite(p.motCy) && p.motCx !== null && p.motCy !== null) { d.motCx = Core.clamp(p.motCx, 0, 1); d.motCy = Core.clamp(p.motCy, 0, 1); }
         if (typeof p.room === 'string') d.room = Phone.cleanRoom(p.room);
         if (typeof p.mqttUrl === 'string' && p.mqttUrl.trim()) d.mqttUrl = p.mqttUrl.trim().slice(0, 200);
         if (typeof p.sndRoom === 'string') d.sndRoom = Phone.cleanRoom(p.sndRoom);
@@ -313,16 +382,22 @@
     const bt = p.input === 'bt';
     const ph = p.input === 'phone';
     const ai = p.input === 'ai';
-    const notMic = bt || ph || ai;
+    const mot = p.input === 'mot';
+    const notMic = bt || ph || ai || mot;
     $('in-mic').classList.toggle('sel', !notMic);
     $('in-bt').classList.toggle('sel', bt);
     $('in-phone').classList.toggle('sel', ph);
     $('in-ai').classList.toggle('sel', ai);
+    $('in-mot').classList.toggle('sel', mot);
     $('pose-on').checked = p.poseOn;
     $('pose-log-on').checked = p.poseLog;
-    ['wrist', 'elbow', 'both'].forEach((m) => $('ai-m-' + m).classList.toggle('sel', p.aiMode === m));
-    ['mouth', 'nose', 'ear', 'shoulder'].forEach((m) => $('ai-r-' + m).classList.toggle('sel', p.aiRef === m));
     ['right', 'left'].forEach((m) => $('ai-h-' + m).classList.toggle('sel', p.aiHand === m));
+    $('mot-thr').value = String(p.motThr);
+    $('mot-thr-text').textContent = p.motThr.toFixed(1) + ' %';
+    $('mot-r').value = String(Math.round(p.motR * 100));
+    $('mot-r-text').textContent = String(Math.round(p.motR * 100));
+    $('mot-thr-mark').style.left = Math.min(100, p.motThr / 40 * 100) + '%';
+    $('mot-info').textContent = p.motCx === null ? 'No circle yet: tap the blue circle icon under the gear on the live screen, then tap the place for the circle.' : 'Circle is set (it can be moved with the blue circle icon on the live screen).';
     $('ai-thr').value = String(p.aiThr);
     $('ai-thr-text').textContent = p.aiThr.toFixed(1);
     if (Pose) { Pose.setLogging(p.poseLog); $('pose-log-info').textContent = p.poseLog ? 'Log: recording, ' + Pose.logInfo() + '.' : 'Log: off (' + Pose.logInfo() + ' kept).'; }
@@ -1729,13 +1804,16 @@
     if (S.running) {
       if (m === 'bt') { phoneDisconnect(); btConnect(true); stopMic(); }   // the chooser must open straight from the tap
       else if (m === 'phone') { btDisconnect(); stopMic(); phoneConnect(); }
-      else if (m === 'ai') { btDisconnect(); phoneDisconnect(); stopMic(); }
+      else if (m === 'ai' || m === 'mot') { btDisconnect(); phoneDisconnect(); stopMic(); }
       else { btDisconnect(); phoneDisconnect(); startMic(); }
     }
     refreshSettingsUi();
     updateArming();
+    S.motPlacing = false;
     updateStatus();
     applyPose();
+    applyMotion();
+    updateMotUi();
     log('input', m);
   }
 
@@ -2343,6 +2421,8 @@
     S.stream = null; S.vTrack = null;
     S.live.srcObject = null;
     try { if (Pose) Pose.stop(); } catch (e) { /* ignore */ }
+    try { if (Motion) Motion.stop(); } catch (e) { /* ignore */ }
+    S.motPlacing = false;
     discardClip();
     try { if (S.wake) await S.wake.release(); } catch (e) { /* ignore */ }
     S.wake = null;
@@ -2413,12 +2493,26 @@
     $('btn-bt-hud').addEventListener('click', () => btConnect(true));
     $('in-phone').addEventListener('click', () => setInput('phone'));
     $('in-ai').addEventListener('click', () => setInput('ai'));
+    $('in-mot').addEventListener('click', () => setInput('mot'));
+
+    // MOT: icon under the gear -> tap the place for the circle; settings sliders
+    $('btn-mot-place').addEventListener('click', () => setMotPlacing(!S.motPlacing));
+    $('mot-place').addEventListener('pointerup', (e) => { e.preventDefault(); placeMotCircle(e.clientX, e.clientY); });
+    $('mot-thr').addEventListener('input', (e) => { S.prefs.motThr = Core.clamp(Math.round((parseFloat(e.target.value) || 12) * 2) / 2, 1, 40); savePrefs(); if (Motion) Motion.config.thr = S.prefs.motThr; refreshSettingsUi(); });
+    $('mot-r').addEventListener('input', (e) => { S.prefs.motR = Core.clamp((parseFloat(e.target.value) || 12) / 100, 0.04, 0.30); savePrefs(); syncMotRegion(); updateMotUi(); refreshSettingsUi(); });
+    $('btn-mot-clear').addEventListener('click', () => { S.prefs.motCx = null; S.prefs.motCy = null; savePrefs(); syncMotRegion(); applyMotion(); updateMotUi(); refreshSettingsUi(); updateStatus(); log('motion circle removed'); });
+    if (Motion) {
+      Motion.onTrigger(() => { if (S.prefs.input === 'mot') { onRemoteSignal('mot', S.mot); const c = $('mot-circle'); c.classList.add('hit'); setTimeout(() => c.classList.remove('hit'), 300); } });
+      Motion.onLevel((v) => {
+        if (!S.panelOpen) return;
+        $('mot-now').textContent = v.toFixed(1) + ' %';
+        $('mot-fill').style.width = Math.min(100, v / 40 * 100) + '%';
+      });
+    }
 
     // pose estimation / AI_trig
     $('pose-on').addEventListener('change', (e) => { S.prefs.poseOn = !!e.target.checked; savePrefs(); applyPose(); refreshSettingsUi(); log('pose overlay', S.prefs.poseOn ? 'on' : 'off'); });
-    ['wrist', 'elbow', 'both'].forEach((m) => $('ai-m-' + m).addEventListener('click', () => { S.prefs.aiMode = m; savePrefs(); applyPoseConfig(); refreshSettingsUi(); log('AI release from', m); }));
     ['right', 'left'].forEach((m) => $('ai-h-' + m).addEventListener('click', () => { S.prefs.aiHand = m; savePrefs(); applyPoseConfig(); refreshSettingsUi(); log('AI shooter', m + ' hand'); }));
-    ['mouth', 'nose', 'ear', 'shoulder'].forEach((m) => $('ai-r-' + m).addEventListener('click', () => { S.prefs.aiRef = m; savePrefs(); applyPoseConfig(); refreshSettingsUi(); log('AI distance measured from', m); }));
     $('ai-thr').addEventListener('input', (e) => { S.prefs.aiThr = Core.clamp(Math.round((parseFloat(e.target.value) || 2) * 10) / 10, 0.5, 4); savePrefs(); applyPoseConfig(); refreshSettingsUi(); });
     $('pose-log-on').addEventListener('change', (e) => { S.prefs.poseLog = !!e.target.checked; savePrefs(); refreshSettingsUi(); log('pose log', S.prefs.poseLog ? 'on' : 'off'); });
     $('btn-pose-clear').addEventListener('click', () => { Pose.clearLog(); refreshSettingsUi(); });
@@ -2560,7 +2654,7 @@
       $('gc-' + c).addEventListener('click', () => { S.prefs.gridColor = c; savePrefs(); refreshSettingsUi(); applyGrid(); });
     });
 
-    window.addEventListener('resize', () => { applyGrid(); applyZoom(); });
+    window.addEventListener('resize', () => { applyGrid(); applyZoom(); updateMotUi(); });
 
     // Lifecycle: browsers stop camera/mic when the page is hidden, so shut down cleanly.
     document.addEventListener('visibilitychange', () => {

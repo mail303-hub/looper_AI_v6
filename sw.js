@@ -1,5 +1,5 @@
 /* Offline cache: after the first load the whole app works without internet. */
-const CACHE = 'dd-archery-looper-v6.8.0';
+const CACHE = 'dd-archery-looper-v7.1.0';
 const FILES = [
   './',
   './index.html',
@@ -9,6 +9,7 @@ const FILES = [
   './mp4.js',
   './phone.js',
   './pose.js',
+  './motion.js',
   './audio-worklet.js',
   './manifest.webmanifest',
   './icons/icon-192.png',

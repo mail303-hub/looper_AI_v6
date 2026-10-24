@@ -27,6 +27,8 @@
   </div>
   <div id="grid" class="hidden"></div>
   <canvas id="pose" class="hidden"></canvas>
+  <div id="mot-circle" class="hidden"></div>
+  <div id="mot-place" class="hidden"><div class="mot-place-hint">Tap on the screen where the sensitive circle should be</div></div>
   <div id="topbar" class="topbar hidden"><span id="src-text">MIC</span><span id="bat-text"></span></div>
 
   <!-- LIVE controls -->
@@ -36,6 +38,9 @@
         <circle cx="12" cy="12" r="3.2"/>
         <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15z"/>
       </svg>
+    </button>
+    <button id="btn-mot-place" class="btn icon top-left-below hidden" type="button" aria-label="Place the motion circle">
+      <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><circle cx="12" cy="12" r="9.5" fill="rgba(90,170,255,0.55)" stroke="rgb(140,200,255)" stroke-width="1.8"/></svg>
     </button>
     <button id="btn-bt-hud" class="btn small top-left2 hidden" type="button">Connect BT</button>
     <div id="status" class="status"></div>
@@ -88,6 +93,7 @@
             <button id="in-bt" class="btn small" type="button">BT</button>
             <button id="in-phone" class="btn small" type="button">PHONE</button>
             <button id="in-ai" class="btn small" type="button">AI_trig</button>
+            <button id="in-mot" class="btn small" type="button">MOT</button>
           </div>
           <div class="row">
             <span>DEVICE_NAME</span>
@@ -102,19 +108,6 @@
         <section id="sec-ai" class="sec">
           <h3>AI_trig (pose estimation)</h3>
           <label class="chk"><input id="pose-on" type="checkbox"> <span>Show pose on the live view</span></label>
-          <div>Release is detected from the</div>
-          <div class="seg">
-            <button id="ai-m-wrist" class="btn small sel" type="button">Wrist</button>
-            <button id="ai-m-elbow" class="btn small" type="button">Elbow</button>
-            <button id="ai-m-both" class="btn small" type="button">Both</button>
-          </div>
-          <div>Distance is measured from the</div>
-          <div class="seg">
-            <button id="ai-r-mouth" class="btn small sel" type="button">Mouth</button>
-            <button id="ai-r-nose" class="btn small" type="button">Nose</button>
-            <button id="ai-r-ear" class="btn small" type="button">Ear</button>
-            <button id="ai-r-shoulder" class="btn small" type="button">Opp. shoulder</button>
-          </div>
           <div class="row"><span>Release speed</span><span id="ai-thr-text">2.0</span></div>
           <input id="ai-thr" type="range" min="0.5" max="4" step="0.1" value="2" aria-label="AI release speed threshold">
           <div class="row dim"><span>more sensitive</span><span>less sensitive</span></div>
@@ -130,7 +123,21 @@
             <button id="btn-pose-clear" class="btn small" type="button">Clear log</button>
           </div>
           <div id="pose-log-info" class="hint">Log: off.</div>
-          <div class="hint">AI_trig mode: the microphone is switched off. When the pose shows a full draw followed by a fast release movement (wrist and/or elbow), a clip is recorded exactly like with a MIC / BT / PHONE signal (Sync offset, lockout and AUTO MODE apply). A full draw while a clip is playing stops the replay and shows the live view (the old clip is dropped unless you saved it). Ready-made MediaPipe Pose model: it is downloaded the first time (internet needed once). The camera should see the archer from the side or at 3/4 angle, not from straight above. Release speed is in shoulder widths per second (0.5 = most sensitive, 4 = least); the elbow uses 75 % of it. The blue dots are the face points the model finds (nose, ears and mouth corners); the blue ring with a label marks the point the distance is measured from (mouth, nose, the ear on the drawing-hand side, or the shoulder opposite the drawing hand), and the dashed line to the drawing wrist shows the distance (in shoulder widths). Right hand = draws with the right hand: the drawing wrist is the right wrist, and "Opp. shoulder" measures from the left shoulder to it; left hand = left wrist and right shoulder. In shoulder mode both arms must be raised, so a resting pose does not count.</div>
+          <div class="hint">AI_trig mode: the microphone is switched off. When the pose shows a full draw followed by a fast release movement of the drawing wrist away from the mouth, a clip is recorded exactly like with a MIC / BT / PHONE signal (Sync offset, lockout and AUTO MODE apply). A full draw while a clip is playing stops the replay and shows the live view (the old clip is dropped unless you saved it). Ready-made MediaPipe Pose model: it is downloaded the first time (internet needed once). The camera should see the archer from the side or at 3/4 angle, not from straight above. Release speed is in shoulder widths per second (0.5 = most sensitive, 4 = least). The blue dots are the mouth corners the model finds; the blue ring marks the point the distance is measured from (the middle of the mouth) and the dashed line to the drawing wrist shows the distance (in shoulder widths). Right hand = draws with the right hand (right wrist); left hand = left wrist.</div>
+        </section>
+
+        <section id="sec-mot" class="sec">
+          <h3>MOT (motion trigger)</h3>
+          <div class="hint">MOT mode: the microphone is switched off. Tap the blue circle icon under the gear (live screen), then tap the place where the sensitive circle should be, e.g. around the string hand at full draw. When the picture inside the circle changes suddenly after a calm moment, a clip is recorded exactly like with a MIC / BT / PHONE signal (Sync offset, lockout and AUTO MODE apply). The camera must not move.</div>
+          <div class="row"><span>Motion change speed</span><span id="mot-thr-text">12 %</span></div>
+          <input id="mot-thr" type="range" min="1" max="40" step="0.5" value="12" aria-label="Motion change speed threshold">
+          <div class="row dim"><span>more sensitive</span><span>less sensitive</span></div>
+          <div class="row"><span>Circle size</span><span id="mot-r-text">12</span></div>
+          <input id="mot-r" type="range" min="4" max="30" step="1" value="12" aria-label="Motion circle size">
+          <div class="row"><span>Motion now</span><span id="mot-now">–</span></div>
+          <div class="meter"><div id="mot-fill"></div><div id="mot-thr-mark"></div></div>
+          <button id="btn-mot-clear" class="btn small wide" type="button">Remove circle</button>
+          <div id="mot-info" class="hint">No circle yet.</div>
         </section>
 
         <section id="sec-phone" class="sec">
@@ -256,7 +263,7 @@
       <div class="row">
         <button id="btn-debug" class="btn small" type="button">Debug</button>
         <button id="btn-debug-copy" class="btn small hidden" type="button">Copy log</button>
-        <span class="dim">v6.8.0</span>
+        <span class="dim">v7.1.0</span>
       </div>
       <pre id="debug-log" class="hidden"></pre>
     </div>
@@ -272,7 +279,7 @@
       <button id="btn-sender" class="btn" type="button">MOTION SENDER</button>
     </div>
     <div id="start-msg" class="start-msg"></div>
-    <div class="ver">v6.8.0</div>
+    <div class="ver">v7.1.0</div>
   </div>
 
   <!-- MOTION SENDER: this phone is the motion sensor, it sends MOT to the looper phone -->
@@ -306,7 +313,7 @@
         <button id="btn-snd-back" class="btn small" type="button">Back</button>
       </div>
       <div id="snd-fs-hint" class="hint hidden">This browser cannot go full screen. On iPhone add the app to the Home Screen (Share → Add to Home Screen) and start it from there: then the browser bars are gone.</div>
-      <div class="row dim"><span></span><span>v6.8.0</span></div>
+      <div class="row dim"><span></span><span>v7.1.0</span></div>
       <div id="snd-status" class="start-msg">Enter the room code shown on the looper phone.</div>
     </div>
     <!-- while the sensor runs: the whole screen ignores touches, only the gear (hold it) opens the settings again -->
@@ -328,6 +335,7 @@
   <script src="mp4.js"></script>
   <script src="phone.js"></script>
   <script src="pose.js"></script>
+  <script src="motion.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -1,7 +1,6 @@
 /* Pose estimation overlay (MediaPipe Pose Landmarker, ready-made model, no training).
  * Loaded lazily: nothing is downloaded until the switch in Settings is turned on.
- * Draws shoulders, elbows, wrists and hips over the live camera view.
- * Later this module will feed the AI_trig trigger source (full draw / release detection). */
+ * Draws shoulders, elbows and wrists over the live camera view and detects full draw + release (AI_trig). */
 (function () {
   'use strict';
   const VER = '0.10.14';
@@ -79,16 +78,16 @@
       if (a.v < 0.4 || b.v < 0.4) return;
       g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke();
     });
-    // face points the model finds: nose (0), ears (7, 8) and mouth corners (9, 10)
+    // face points the model finds: the mouth corners (9, 10)
     g.fillStyle = 'rgba(0,200,255,0.85)';
-    [0, 7, 8, 9, 10].forEach((i) => {
+    [9, 10].forEach((i) => {
       if (!lm[i]) return;
       const p = P(i);
       if (p.v < 0.4) return;
       g.beginPath(); g.arc(p.x, p.y, 4.5, 0, Math.PI * 2); g.fill();
     });
     // the point the distance is measured from: ring + label, and a line to the drawing wrist with the distance
-    if (lm[0] && lm[7] && lm[8] && lm[9] && lm[10] && lm[11] && lm[12]) {
+    if (lm[9] && lm[10] && lm[11] && lm[12]) {
       const rp = refPoint(lm);
       const rx = r.x + rp.x * r.w, ry = r.y + rp.y * r.h;
       const wi = CFG.hand === 'left' ? 15 : 16;
@@ -105,9 +104,8 @@
         g.fillText(dTxt, dx, dy);
       }
       g.font = '600 13px system-ui, sans-serif'; g.textAlign = 'left'; g.fillStyle = 'rgba(0,200,255,1)';
-      const lbl = CFG.ref === 'nose' ? 'NOSE' : CFG.ref === 'ear' ? (CFG.hand === 'left' ? 'L EAR' : 'R EAR') : CFG.ref === 'shoulder' ? (CFG.hand === 'left' ? 'R SHOULDER' : 'L SHOULDER') : 'MOUTH';
-      g.lineWidth = 3.5; g.strokeStyle = 'rgba(0,0,0,0.75)'; g.strokeText(lbl, rx + 14, ry - 8);
-      g.fillText(lbl, rx + 14, ry - 8);
+      g.lineWidth = 3.5; g.strokeStyle = 'rgba(0,0,0,0.75)'; g.strokeText('MOUTH', rx + 14, ry - 8);
+      g.fillText('MOUTH', rx + 14, ry - 8);
     }
     g.fillStyle = 'rgba(255,214,10,0.95)';
     POINTS.forEach((i) => {
@@ -130,17 +128,9 @@
     cooldownMs: 1500,
     lostMs: 600,        // anchor lost without a fast move for this long = let-down (no release)
     hand: 'right',      // shooter's drawing hand: 'right' (draws with the right hand) or 'left'
-    ref: 'mouth',       // the drawing wrist is measured from the 'mouth' (landmarks 9/10), the 'nose' (landmark 0), the 'ear' (landmark 8 = right ear for a right-hand shooter, 7 = left ear for a left-hand shooter) or the 'shoulder' (the one opposite the drawing hand)
-    shDrawY: 0.4,       // shoulder mode: drawing wrist must be above (shoulder line + this x shoulder width); negative = above the shoulder line
-    shBowY: 0.9,        // shoulder mode: bow wrist must be above (shoulder line + this x shoulder width)
-    earOffset: 0.2,     // the ear is further from the string hand than the mouth: anchor / draw distances grow by this in 'ear' mode (estimate, tune with the pose log)
-    shoulderOffset: 0.65, // wrist-to-opposite-shoulder distances are about 1.2 shoulder widths at full draw: anchor / draw distances grow by this in 'shoulder' mode
-    noseOffset: 0.15,   // the nose is higher than the mouth: anchor / draw distances grow by this (shoulder widths) in 'nose' mode
-    mode: 'wrist',      // release signal: 'wrist' | 'elbow' | 'both'
-    elbowSpeed: 1.5,    // drawing elbow moving faster than this (shoulder widths / s, any direction) = release
     interval: 66        // ms between detections (about 15 / s); AI_trig uses 33 for the short release movement
   };
-  const det = { state: 'IDLE', since: 0, prevD: null, prevT: 0, vS: 0, prevE: null, eV: 0, side: null, flashUntil: 0, flashType: '', lostSince: 0 };
+  const det = { state: 'IDLE', since: 0, prevD: null, prevT: 0, vS: 0, side: null, flashUntil: 0, flashType: '', lostSince: 0 };
   let onEvent = null;
 
   const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -157,24 +147,18 @@
     try { if (onEvent) onEvent({ type, t }); } catch (e) { /* ignore */ }
   }
 
-  // the point the drawing hand is measured from
-  function refPoint(lm) {
-    if (CFG.ref === 'ear') { const e = lm[CFG.hand === 'left' ? 7 : 8]; return { x: e.x, y: e.y }; }   // ear on the drawing-hand side
-    if (CFG.ref === 'shoulder') { const o = lm[CFG.hand === 'left' ? 12 : 11]; return { x: o.x, y: o.y }; }   // right hand: left shoulder (11); left hand: right shoulder (12)
-    return CFG.ref === 'nose' ? { x: lm[0].x, y: lm[0].y } : { x: (lm[9].x + lm[10].x) / 2, y: (lm[9].y + lm[10].y) / 2 };
-  }
-  const refIdx = () => (CFG.ref === 'shoulder' ? [] : CFG.ref === 'ear' ? [CFG.hand === 'left' ? 7 : 8] : CFG.ref === 'nose' ? [0] : [9, 10]);
+  // the point the drawing hand is measured from: the middle of the mouth corners (landmarks 9, 10)
+  function refPoint(lm) { return { x: (lm[9].x + lm[10].x) / 2, y: (lm[9].y + lm[10].y) / 2 }; }
 
   function detect(lm, t) {
     const vis = (i) => lm[i] && (lm[i].visibility === undefined || lm[i].visibility > 0.4);
-    if (![...refIdx(), 11, 12, 13, 14, 15, 16].every(vis)) {
+    if (![9, 10, 11, 12, 13, 14, 15, 16].every(vis)) {
       if (det.state !== 'IDLE' && t - det.since > CFG.lostMs) setState('IDLE', t);
-      det.prevD = null; det.prevE = null; return;
+      det.prevD = null; return;
     }
     const sw = dist(lm[11], lm[12]);
     if (sw < 0.03) return;
     const mouth = refPoint(lm);
-    const off = CFG.ref === 'nose' ? CFG.noseOffset : CFG.ref === 'ear' ? CFG.earOffset : CFG.ref === 'shoulder' ? CFG.shoulderOffset : 0;   // nose is higher than the mouth
     const dL = dist(lm[15], mouth) / sw, dR = dist(lm[16], mouth) / sw;
     // the hand nearer the face is the drawing hand, the other arm holds the bow
     const side = CFG.hand === 'left' ? 'L' : 'R';   // the drawing hand is set in Settings (right hand = right wrist)
@@ -183,34 +167,22 @@
     let v = 0;
     if (det.prevD !== null && t > det.prevT) v = (d - det.prevD) / ((t - det.prevT) / 1000);
     det.vS = det.vS * 0.5 + v * 0.5;  // light smoothing; positive = hand moves away from the face
-    // drawing elbow speed (shoulder widths / s, any direction)
-    const eI = side === 'L' ? 13 : 14;
-    if (vis(eI)) {
-      const ex = lm[eI].x, ey = lm[eI].y;
-      let ev = 0;
-      if (det.prevE && t > det.prevT) ev = Math.hypot(ex - det.prevE.x, ey - det.prevE.y) / sw / ((t - det.prevT) / 1000);
-      det.eV = det.eV * 0.5 + ev * 0.5;
-      det.prevE = { x: ex, y: ey };
-    } else { det.prevE = null; det.eV = 0; }
     det.prevD = d; det.prevT = t;
     const straight = bowAng >= CFG.bowAngle;
-    // shoulder mode has no face anchor: a resting pose must not count, so both wrists must be raised (draw wrist above the shoulder line, bow wrist near it)
-    const sy = (lm[11].y + lm[12].y) / 2;
-    const heightOk = CFG.ref !== 'shoulder' || (((side === 'L' ? lm[15].y : lm[16].y) - sy) / sw < CFG.shDrawY && ((side === 'L' ? lm[16].y : lm[15].y) - sy) / sw < CFG.shBowY);
 
     switch (det.state) {
       case 'IDLE':
-        if (t >= det.flashUntil + CFG.cooldownMs - 400 && straight && heightOk && d < CFG.drawDist + off) { det.side = side; setState('DRAW', t); }
+        if (t >= det.flashUntil + CFG.cooldownMs - 400 && straight && d < CFG.drawDist) { det.side = side; setState('DRAW', t); }
         break;
       case 'DRAW':
-        if (!straight || !heightOk || d > CFG.drawDist + off + 0.3) { setState('IDLE', t); det.side = null; }
-        else if (d < CFG.anchorDist + off && Math.abs(det.vS) < CFG.steadySpeed) {
+        if (!straight || d > CFG.drawDist + 0.3) { setState('IDLE', t); det.side = null; }
+        else if (d < CFG.anchorDist && Math.abs(det.vS) < CFG.steadySpeed) {
           if (t - det.since >= CFG.holdMs) { setState('FULL_DRAW', t); emit('full_draw', t); det.lostSince = 0; }
         } else det.since = t; // not anchored/steady yet: restart the hold timer
         break;
       case 'FULL_DRAW':
-        if (releaseNow(d, off)) { emit('release', t); setState('IDLE', t); det.side = null; }
-        else if (d > CFG.anchorDist + off + 0.15 || !straight || !heightOk) {
+        if (releaseNow(d)) { emit('release', t); setState('IDLE', t); det.side = null; }
+        else if (d > CFG.anchorDist + 0.15 || !straight) {
           if (!det.lostSince) det.lostSince = t;
           if (t - det.lostSince > CFG.lostMs) { setState('IDLE', t); det.side = null; } // let-down
         } else det.lostSince = 0;
@@ -218,10 +190,9 @@
     }
   }
 
-  function releaseNow(d, off) {
-    const wristFast = det.vS > CFG.releaseSpeed && d > (CFG.anchorDist + off) * 0.8;
-    const elbowFast = det.eV > CFG.elbowSpeed;
-    return CFG.mode === 'elbow' ? elbowFast : CFG.mode === 'both' ? (wristFast && elbowFast) : wristFast;
+  // release = the drawing wrist moves away from the mouth faster than the threshold (Settings > AI_trig > Release speed)
+  function releaseNow(d) {
+    return det.vS > CFG.releaseSpeed && d > CFG.anchorDist * 0.8;
   }
 
   function drawState(g) {
@@ -237,7 +208,7 @@
   // ---- pose log (for tuning the thresholds / later training) -----------------
   // Frames hold the 11 useful landmarks; labels hold the reference signals
   // (mic / BT trigger = true release time) and the detector's own events.
-  const LOG_IDX = [0, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 23, 24];   // nose, ears, mouth corners, shoulders, elbows, wrists, hips
+  const LOG_IDX = [9, 10, 11, 12, 13, 14, 15, 16, 23, 24];   // mouth corners, shoulders, elbows, wrists, hips
   const LOG_MAX = 20000;
   const log = { on: false, frames: [], marks: [], t0: 0 };
   function setLogging(on) {
@@ -300,7 +271,7 @@
     running = false; token++;
     clearTimeout(timer); timer = 0;
     lastVideoTime = -1; lastResult = null;
-    det.state = 'IDLE'; det.side = null; det.prevD = null; det.prevE = null; det.vS = 0; det.eV = 0;
+    det.state = 'IDLE'; det.side = null; det.prevD = null; det.vS = 0;
     clear();
     if (canvas) canvas.classList.add('hidden');
     status('Pose estimation off');

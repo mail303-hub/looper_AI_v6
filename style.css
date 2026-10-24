@@ -17,6 +17,14 @@ video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contai
 /* measuring grid: above the video, below the buttons, never catches touches */
 #grid { position: fixed; inset: 0; z-index: 6; pointer-events: none; }
 /* pose estimation overlay on the live view: above the video, below the buttons */
+/* MOT: the sensitive circle (bluish, 60 % transparent) and the layer that takes the placing tap */
+#mot-circle { position: fixed; z-index: 3; pointer-events: none; border-radius: 50%; background: rgba(80,170,255,0.40); border: 2px solid rgba(150,210,255,0.85); }
+#mot-circle.hit { background: rgba(120,200,255,0.65); }
+#mot-place { position: fixed; inset: 0; z-index: 8; background: rgba(0,0,0,0.001); cursor: crosshair; touch-action: none; }
+.mot-place-hint { position: absolute; left: 50%; top: 18%; transform: translateX(-50%); background: rgba(20,20,20,0.9); border: 1px solid #58a6ff; border-radius: 12px; padding: 10px 18px; font-size: 16px; text-align: center; max-width: 80%; pointer-events: none; }
+#mot-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: #58a6ff; }
+#mot-thr-mark { position: absolute; top: 0; bottom: 0; width: 3px; background: #f85149; left: 30%; }
+.top-left-below { position: fixed; top: calc(max(12px, env(safe-area-inset-top)) + 48px); left: max(12px, env(safe-area-inset-left)); }
 #pose { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 3; pointer-events: none; }
 
 .hud { position: fixed; inset: 0; z-index: 10; pointer-events: none; }
@@ -155,6 +163,7 @@ select {
   .btn { min-height: 44px; padding: 8px 16px; }
   .btn.small { min-height: 36px; }
   .btn.icon { min-height: 44px; }
+  .top-left-below { top: calc(max(12px, env(safe-area-inset-top)) + 58px); }
   .btn.big { min-height: 28px; font-size: 14px; padding: 3px 12px; }
   .bottom-bar { padding-top: 4px; }
   .banner { top: 18%; padding: 14px 24px; }
