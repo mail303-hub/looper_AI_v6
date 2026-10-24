@@ -1,5 +1,5 @@
 /* Offline cache: after the first load the whole app works without internet. */
-const CACHE = 'dd-archery-looper-v7.2.0';
+const CACHE = 'dd-archery-looper-v7.3.0';
 const FILES = [
   './',
   './index.html',

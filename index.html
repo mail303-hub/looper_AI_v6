@@ -129,9 +129,12 @@
         <section id="sec-mot" class="sec">
           <h3>MOT (motion trigger)</h3>
           <div class="hint">MOT mode: the microphone is switched off. Tap the blue circle icon under the gear (live screen), then tap the place where the sensitive circle should be, e.g. around the string hand at full draw. When the picture inside the circle changes suddenly after a calm moment, a clip is recorded exactly like with a MIC / BT / PHONE signal (Sync offset, lockout and AUTO MODE apply). The camera must not move.</div>
-          <div class="row"><span>Motion change (% of circle area)</span><span id="mot-thr-text">12 %</span></div>
+          <div class="row"><span>Sideways motion (% of circle moving)</span><span id="mot-thr-text">12 %</span></div>
           <input id="mot-thr" type="range" min="1" max="40" step="0.5" value="12" aria-label="Motion change speed threshold">
           <div class="row dim"><span>more sensitive</span><span>less sensitive</span></div>
+          <div class="row"><span>Direction tolerance (° from horizontal)</span><span id="mot-ang-text">35°</span></div>
+          <input id="mot-ang" type="range" min="5" max="80" step="5" value="35" aria-label="Motion direction tolerance">
+          <div class="row dim"><span>only horizontal</span><span>also diagonal</span></div>
           <div class="row"><span>Circle size</span><span id="mot-r-text">12</span></div>
           <input id="mot-r" type="range" min="4" max="30" step="1" value="12" aria-label="Motion circle size">
           <div class="row"><span>Motion now</span><span id="mot-now">–</span></div>
@@ -263,7 +266,7 @@
       <div class="row">
         <button id="btn-debug" class="btn small" type="button">Debug</button>
         <button id="btn-debug-copy" class="btn small hidden" type="button">Copy log</button>
-        <span class="dim">v7.2.0</span>
+        <span class="dim">v7.3.0</span>
       </div>
       <pre id="debug-log" class="hidden"></pre>
     </div>
@@ -279,7 +282,7 @@
       <button id="btn-sender" class="btn" type="button">MOTION SENDER</button>
     </div>
     <div id="start-msg" class="start-msg"></div>
-    <div class="ver">v7.2.0</div>
+    <div class="ver">v7.3.0</div>
   </div>
 
   <!-- MOTION SENDER: this phone is the motion sensor, it sends MOT to the looper phone -->
@@ -313,7 +316,7 @@
         <button id="btn-snd-back" class="btn small" type="button">Back</button>
       </div>
       <div id="snd-fs-hint" class="hint hidden">This browser cannot go full screen. On iPhone add the app to the Home Screen (Share → Add to Home Screen) and start it from there: then the browser bars are gone.</div>
-      <div class="row dim"><span></span><span>v7.2.0</span></div>
+      <div class="row dim"><span></span><span>v7.3.0</span></div>
       <div id="snd-status" class="start-msg">Enter the room code shown on the looper phone.</div>
     </div>
     <!-- while the sensor runs: the whole screen ignores touches, only the gear (hold it) opens the settings again -->
