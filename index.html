@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>DD Archery Looper</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="DD Archery">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Camera preview (always rendering while the app runs) -->
+  <video id="live" playsinline muted autoplay></video>
+
+  <!-- Playback of the event clip -->
+  <div id="playview" class="hidden">
+    <video id="play" playsinline muted loop></video>
+    <div id="gesture"></div>
+    <div id="frameinfo" class="hidden"></div>
+    <div id="pauseicon" class="hidden">&#10074;&#10074;</div>
+  </div>
+  <div id="grid" class="hidden"></div>
+  <canvas id="pose" class="hidden"></canvas>
+  <div id="topbar" class="topbar hidden"><span id="src-text">MIC</span><span id="bat-text"></span></div>
+
+  <!-- LIVE controls -->
+  <div id="hud-live" class="hud hidden">
+    <button id="btn-settings" class="btn icon top-left" type="button" aria-label="Settings">
+      <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3.2"/>
+        <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15z"/>
+      </svg>
+    </button>
+    <button id="btn-bt-hud" class="btn small top-left2 hidden" type="button">Connect BT</button>
+    <div id="status" class="status"></div>
+    <button id="btn-exit-live" class="btn top-right" type="button">EXIT</button>
+    <div id="banner" class="banner hidden">
+      <div id="banner-text"></div>
+      <button id="btn-calib-cancel" class="btn small" type="button">Cancel</button>
+    </div>
+  </div>
+
+  <!-- PLAYBACK controls -->
+  <div id="hud-play" class="hud hidden">
+    <button id="btn-zoom-reset" class="btn small top-left hidden" type="button">Reset zoom</button>
+    <div id="auto-status" class="status auto-status"></div>
+    <button id="btn-exit-play" class="btn top-right" type="button">EXIT</button>
+    <div class="bottom-bar">
+      <div class="bar-row">
+        <button id="btn-save" class="btn big save" type="button">SAVE</button>
+        <button id="btn-slomo" class="btn big slomo" type="button">SLOMO</button>
+        <button id="btn-next" class="btn big next" type="button">NEXT</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings panel -->
+  <div id="panel" class="panel hidden">
+    <div id="panel-box" class="panel-box">
+      <div class="panel-head">
+        <div class="panel-title">SETTINGS</div>
+        <button id="btn-panel-close" class="btn small" type="button">Close</button>
+      </div>
+
+      <div class="panel-grid">
+        <section class="sec">
+          <h3>Camera</h3>
+          <select id="cam-select" aria-label="Camera"></select>
+          <button id="btn-cam-flip" class="btn small wide" type="button">Next camera</button>
+          <div class="row"><span>Filming speed</span></div>
+          <div class="seg">
+            <button id="fps-30" class="btn small sel" type="button">30 fps</button>
+            <button id="fps-60" class="btn small" type="button">60 fps</button>
+          </div>
+          <div id="fps-info" class="hint">Camera: fps unknown</div>
+        </section>
+
+        <section class="sec">
+          <h3>Trigger input</h3>
+          <div class="seg">
+            <button id="in-mic" class="btn small sel" type="button">MIC</button>
+            <button id="in-bt" class="btn small" type="button">BT</button>
+          </div>
+          <div class="row">
+            <span>DEVICE_NAME</span>
+          </div>
+          <input id="bt-name" class="txt" type="text" value="xiao_mg24_1" maxlength="32" autocapitalize="off" autocomplete="off" spellcheck="false" aria-label="Bluetooth device name">
+          <button id="btn-bt-connect" class="btn small wide" type="button">Connect BT</button>
+          <div class="hint">BLE service UUIDs are built in and cannot be changed.</div>
+          <div id="bt-info" class="hint">BT off (microphone is the trigger).</div>
+          <div class="hint">BT mode: the microphone is switched off. A BLE message containing "MOT" acts like a mic signal; digits after it (e.g. MOT45) are shown as battery %. Needs Web Bluetooth: Android Chrome or desktop Chrome/Edge (not iPhone/iPad Safari).</div>
+        </section>
+
+        <section id="sec-mic" class="sec">
+          <h3>Microphone sensitivity</h3>
+          <button id="btn-calib" class="btn small wide" type="button">Calibrate (3 shots)</button>
+          <div class="row">
+            <span>Threshold</span>
+            <span id="thr-text">&ndash;</span>
+          </div>
+          <div class="meter"><div id="meter-fill"></div><div id="meter-thr"></div></div>
+          <input id="thr-slider" type="range" min="-60" max="-0.5" step="0.5" value="-0.5" aria-label="Threshold">
+          <div class="row dim"><span>more sensitive</span><span>less sensitive</span></div>
+          <div class="row">
+            <span>Sync offset</span>
+            <span><span id="off-text">0</span> ms</span>
+          </div>
+          <input id="off-slider" type="range" min="-300" max="300" step="10" value="0" aria-label="Sync offset">
+        </section>
+
+        <section class="sec">
+          <h3>Video ring buffer</h3>
+          <div class="row">
+            <span>Length</span>
+            <span id="buf-text" class="val">2 s</span>
+          </div>
+          <input id="buf-slider" type="range" min="0.5" max="5" step="0.5" value="2" aria-label="Video ring buffer length">
+          <div class="row dim"><span>0.5 s</span><span>5 s</span></div>
+          <div class="row">
+            <span>Signal position</span>
+            <span id="split-text" class="val">1 s before | 1 s after</span>
+          </div>
+          <input id="split-slider" type="range" min="0" max="2" step="0.1" value="1" aria-label="Seconds before the signal">
+          <div class="row dim"><span>more after</span><span>more before</span></div>
+          <div class="hint">Length is the loop time. The second slider moves the signal inside it: seconds before the signal on the left of "|", seconds after on the right. Default: signal in the middle.</div>
+        </section>
+
+        <section class="sec">
+          <h3>AUTO MODE</h3>
+          <label class="chk"><input id="auto-on" type="checkbox"> <span>AUTO MODE</span></label>
+          <div class="hint">Signals are also detected while a clip is playing: the next signal replaces the playing clip with the new video (the old one is dropped unless you saved it).</div>
+        </section>
+
+        <section class="sec">
+          <h3>Pose estimation (AI)</h3>
+          <label class="chk"><input id="pose-on" type="checkbox"> <span>Show pose estimation (ON / OFF)</span></label>
+          <div id="pose-info" class="hint">Off.</div>
+          <label class="chk"><input id="pose-log-on" type="checkbox"> <span>Record pose log</span></label>
+          <div class="seg">
+            <button id="btn-pose-dl" class="btn small" type="button">Download log</button>
+            <button id="btn-pose-clear" class="btn small" type="button">Clear log</button>
+          </div>
+          <div id="pose-log-info" class="hint">Log: off.</div>
+          <div class="hint">Ready-made MediaPipe Pose model (no training). Draws shoulders, elbows, wrists and hips over the live camera view. The model is downloaded the first time it is switched on (internet needed once). The rule-based draw/release detector runs while it is on (yellow FULL DRAW, green RELEASE). The log records pose points plus the microphone/BT signal as the true release time, to tune the detector. Preparation for the AI_trig trigger source.</div>
+        </section>
+
+        <section class="sec">
+          <h3>Screen orientation</h3>
+          <div class="seg">
+            <button id="ori-landscape" class="btn small sel" type="button">Landscape</button>
+            <button id="ori-portrait" class="btn small" type="button">Portrait</button>
+          </div>
+          <div class="hint">Locks the screen where the browser allows it (Android). On iPhone/iPad and desktop just rotate the device; the app works in both.</div>
+        </section>
+
+        <section class="sec">
+          <h3>Slow motion</h3>
+          <div class="row">
+            <span>SLOMO_SPEED</span>
+            <span id="slomo-text" class="val">7 fps</span>
+          </div>
+          <input id="slomo-slider" type="range" min="1" max="30" step="1" value="7" aria-label="SLOMO_SPEED frames per second">
+          <div class="row dim"><span>1 fps</span><span>30 fps</span></div>
+          <div class="hint">The SLOMO button (bottom of the playback screen) plays the clip at this many frames per second. Press it again for normal speed. Saved videos always keep normal speed.</div>
+        </section>
+
+        <section class="sec">
+          <h3>Playback zoom</h3>
+          <label class="chk"><input id="zoom-on" type="checkbox"> <span>Zoom in playback (pinch / mouse wheel)</span></label>
+          <div class="hint">Two fingers: pinch to zoom, drag to move. PC: mouse wheel zooms at the cursor; Shift + drag (or right button) moves the picture. The zoom stays for the next clips until you press Reset zoom (top left in playback). SAVE writes the clip with this zoom and offset (and the grid, if shown).</div>
+        </section>
+
+        <section class="sec">
+          <h3>Playback grid</h3>
+          <label class="chk"><input id="grid-on" type="checkbox"> <span>Show grid in playback</span></label>
+          <div class="row">
+            <span>Cell size</span>
+            <span id="grid-size-text">100 px</span>
+          </div>
+          <input id="grid-size" type="range" min="30" max="200" step="10" value="100" aria-label="Grid cell size">
+          <div class="row">
+            <span>Intensity</span>
+            <span id="grid-int-text">5</span>
+          </div>
+          <input id="grid-int" type="range" min="1" max="10" step="1" value="5" aria-label="Grid intensity">
+          <div class="row">
+            <span>Colour</span>
+            <span class="swatches">
+              <button id="gc-black" class="swatch" type="button" aria-label="Black" style="background:#000"></button>
+              <button id="gc-white" class="swatch" type="button" aria-label="White" style="background:#fff"></button>
+              <button id="gc-red" class="swatch" type="button" aria-label="Red" style="background:#f00"></button>
+              <button id="gc-green" class="swatch" type="button" aria-label="Green" style="background:#0f0"></button>
+              <button id="gc-blue" class="swatch" type="button" aria-label="Blue" style="background:#1e50ff"></button>
+            </span>
+          </div>
+        </section>
+      </div>
+
+      <div class="row">
+        <button id="btn-debug" class="btn small" type="button">Debug</button>
+        <button id="btn-debug-copy" class="btn small hidden" type="button">Copy log</button>
+        <span class="dim">v5.1</span>
+      </div>
+      <pre id="debug-log" class="hidden"></pre>
+    </div>
+  </div>
+
+  <!-- Start / stopped screen (needed so the browser lets us use camera, mic and audio) -->
+  <div id="start" class="start">
+    <img src="icons/icon-192.png" alt="" width="96" height="96">
+    <h1>DD Archery Looper</h1>
+    <button id="btn-start" class="btn huge" type="button">START</button>
+    <div id="start-msg" class="start-msg"></div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="core.js"></script>
+  <script src="mp4.js"></script>
+  <script src="pose.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
