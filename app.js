@@ -252,7 +252,7 @@
         d.poseLog = !!p.poseLog;
         d.aiMode = p.aiMode === 'elbow' || p.aiMode === 'both' ? p.aiMode : 'wrist';
         if (isFinite(p.aiThr)) d.aiThr = Core.clamp(Math.round(p.aiThr * 10) / 10, 0.5, 4);
-        d.aiRef = p.aiRef === 'nose' || p.aiRef === 'shoulder' ? p.aiRef : 'mouth';
+        d.aiRef = p.aiRef === 'nose' || p.aiRef === 'ear' || p.aiRef === 'shoulder' ? p.aiRef : 'mouth';
         d.aiHand = p.aiHand === 'left' ? 'left' : 'right';
         if (typeof p.room === 'string') d.room = Phone.cleanRoom(p.room);
         if (typeof p.mqttUrl === 'string' && p.mqttUrl.trim()) d.mqttUrl = p.mqttUrl.trim().slice(0, 200);
@@ -321,7 +321,7 @@
     $('pose-on').checked = p.poseOn;
     $('pose-log-on').checked = p.poseLog;
     ['wrist', 'elbow', 'both'].forEach((m) => $('ai-m-' + m).classList.toggle('sel', p.aiMode === m));
-    ['mouth', 'nose', 'shoulder'].forEach((m) => $('ai-r-' + m).classList.toggle('sel', p.aiRef === m));
+    ['mouth', 'nose', 'ear', 'shoulder'].forEach((m) => $('ai-r-' + m).classList.toggle('sel', p.aiRef === m));
     ['right', 'left'].forEach((m) => $('ai-h-' + m).classList.toggle('sel', p.aiHand === m));
     $('ai-thr').value = String(p.aiThr);
     $('ai-thr-text').textContent = p.aiThr.toFixed(1);
@@ -2418,7 +2418,7 @@
     $('pose-on').addEventListener('change', (e) => { S.prefs.poseOn = !!e.target.checked; savePrefs(); applyPose(); refreshSettingsUi(); log('pose overlay', S.prefs.poseOn ? 'on' : 'off'); });
     ['wrist', 'elbow', 'both'].forEach((m) => $('ai-m-' + m).addEventListener('click', () => { S.prefs.aiMode = m; savePrefs(); applyPoseConfig(); refreshSettingsUi(); log('AI release from', m); }));
     ['right', 'left'].forEach((m) => $('ai-h-' + m).addEventListener('click', () => { S.prefs.aiHand = m; savePrefs(); applyPoseConfig(); refreshSettingsUi(); log('AI shooter', m + ' hand'); }));
-    ['mouth', 'nose', 'shoulder'].forEach((m) => $('ai-r-' + m).addEventListener('click', () => { S.prefs.aiRef = m; savePrefs(); applyPoseConfig(); refreshSettingsUi(); log('AI distance measured from', m); }));
+    ['mouth', 'nose', 'ear', 'shoulder'].forEach((m) => $('ai-r-' + m).addEventListener('click', () => { S.prefs.aiRef = m; savePrefs(); applyPoseConfig(); refreshSettingsUi(); log('AI distance measured from', m); }));
     $('ai-thr').addEventListener('input', (e) => { S.prefs.aiThr = Core.clamp(Math.round((parseFloat(e.target.value) || 2) * 10) / 10, 0.5, 4); savePrefs(); applyPoseConfig(); refreshSettingsUi(); });
     $('pose-log-on').addEventListener('change', (e) => { S.prefs.poseLog = !!e.target.checked; savePrefs(); refreshSettingsUi(); log('pose log', S.prefs.poseLog ? 'on' : 'off'); });
     $('btn-pose-clear').addEventListener('click', () => { Pose.clearLog(); refreshSettingsUi(); });

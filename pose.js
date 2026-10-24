@@ -79,16 +79,16 @@
       if (a.v < 0.4 || b.v < 0.4) return;
       g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke();
     });
-    // face points the model finds: nose (0) and mouth corners (9, 10)
+    // face points the model finds: nose (0), ears (7, 8) and mouth corners (9, 10)
     g.fillStyle = 'rgba(0,200,255,0.85)';
-    [0, 9, 10].forEach((i) => {
+    [0, 7, 8, 9, 10].forEach((i) => {
       if (!lm[i]) return;
       const p = P(i);
       if (p.v < 0.4) return;
       g.beginPath(); g.arc(p.x, p.y, 4.5, 0, Math.PI * 2); g.fill();
     });
     // the point the distance is measured from: ring + label, and a line to the drawing wrist with the distance
-    if (lm[0] && lm[9] && lm[10] && lm[11] && lm[12]) {
+    if (lm[0] && lm[7] && lm[8] && lm[9] && lm[10] && lm[11] && lm[12]) {
       const rp = refPoint(lm);
       const rx = r.x + rp.x * r.w, ry = r.y + rp.y * r.h;
       const wi = CFG.hand === 'left' ? 15 : 16;
@@ -105,7 +105,7 @@
         g.fillText(dTxt, dx, dy);
       }
       g.font = '600 13px system-ui, sans-serif'; g.textAlign = 'left'; g.fillStyle = 'rgba(0,200,255,1)';
-      const lbl = CFG.ref === 'nose' ? 'NOSE' : CFG.ref === 'shoulder' ? (CFG.hand === 'left' ? 'R SHOULDER' : 'L SHOULDER') : 'MOUTH';
+      const lbl = CFG.ref === 'nose' ? 'NOSE' : CFG.ref === 'ear' ? (CFG.hand === 'left' ? 'L EAR' : 'R EAR') : CFG.ref === 'shoulder' ? (CFG.hand === 'left' ? 'R SHOULDER' : 'L SHOULDER') : 'MOUTH';
       g.lineWidth = 3.5; g.strokeStyle = 'rgba(0,0,0,0.75)'; g.strokeText(lbl, rx + 14, ry - 8);
       g.fillText(lbl, rx + 14, ry - 8);
     }
@@ -130,9 +130,10 @@
     cooldownMs: 1500,
     lostMs: 600,        // anchor lost without a fast move for this long = let-down (no release)
     hand: 'right',      // shooter's drawing hand: 'right' (draws with the right hand) or 'left'
-    ref: 'mouth',       // the drawing wrist is measured from the 'mouth' (landmarks 9/10), the 'nose' (landmark 0) or the 'shoulder' (the one opposite the drawing hand)
+    ref: 'mouth',       // the drawing wrist is measured from the 'mouth' (landmarks 9/10), the 'nose' (landmark 0), the 'ear' (landmark 8 = right ear for a right-hand shooter, 7 = left ear for a left-hand shooter) or the 'shoulder' (the one opposite the drawing hand)
     shDrawY: 0.4,       // shoulder mode: drawing wrist must be above (shoulder line + this x shoulder width); negative = above the shoulder line
     shBowY: 0.9,        // shoulder mode: bow wrist must be above (shoulder line + this x shoulder width)
+    earOffset: 0.2,     // the ear is further from the string hand than the mouth: anchor / draw distances grow by this in 'ear' mode (estimate, tune with the pose log)
     shoulderOffset: 0.65, // wrist-to-opposite-shoulder distances are about 1.2 shoulder widths at full draw: anchor / draw distances grow by this in 'shoulder' mode
     noseOffset: 0.15,   // the nose is higher than the mouth: anchor / draw distances grow by this (shoulder widths) in 'nose' mode
     mode: 'wrist',      // release signal: 'wrist' | 'elbow' | 'both'
@@ -158,10 +159,11 @@
 
   // the point the drawing hand is measured from
   function refPoint(lm) {
+    if (CFG.ref === 'ear') { const e = lm[CFG.hand === 'left' ? 7 : 8]; return { x: e.x, y: e.y }; }   // ear on the drawing-hand side
     if (CFG.ref === 'shoulder') { const o = lm[CFG.hand === 'left' ? 12 : 11]; return { x: o.x, y: o.y }; }   // right hand: left shoulder (11); left hand: right shoulder (12)
     return CFG.ref === 'nose' ? { x: lm[0].x, y: lm[0].y } : { x: (lm[9].x + lm[10].x) / 2, y: (lm[9].y + lm[10].y) / 2 };
   }
-  const refIdx = () => (CFG.ref === 'shoulder' ? [] : CFG.ref === 'nose' ? [0] : [9, 10]);
+  const refIdx = () => (CFG.ref === 'shoulder' ? [] : CFG.ref === 'ear' ? [CFG.hand === 'left' ? 7 : 8] : CFG.ref === 'nose' ? [0] : [9, 10]);
 
   function detect(lm, t) {
     const vis = (i) => lm[i] && (lm[i].visibility === undefined || lm[i].visibility > 0.4);
@@ -172,7 +174,7 @@
     const sw = dist(lm[11], lm[12]);
     if (sw < 0.03) return;
     const mouth = refPoint(lm);
-    const off = CFG.ref === 'nose' ? CFG.noseOffset : CFG.ref === 'shoulder' ? CFG.shoulderOffset : 0;   // nose is higher than the mouth
+    const off = CFG.ref === 'nose' ? CFG.noseOffset : CFG.ref === 'ear' ? CFG.earOffset : CFG.ref === 'shoulder' ? CFG.shoulderOffset : 0;   // nose is higher than the mouth
     const dL = dist(lm[15], mouth) / sw, dR = dist(lm[16], mouth) / sw;
     // the hand nearer the face is the drawing hand, the other arm holds the bow
     const side = CFG.hand === 'left' ? 'L' : 'R';   // the drawing hand is set in Settings (right hand = right wrist)
@@ -235,7 +237,7 @@
   // ---- pose log (for tuning the thresholds / later training) -----------------
   // Frames hold the 11 useful landmarks; labels hold the reference signals
   // (mic / BT trigger = true release time) and the detector's own events.
-  const LOG_IDX = [0, 9, 10, 11, 12, 13, 14, 15, 16, 23, 24];
+  const LOG_IDX = [0, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 23, 24];   // nose, ears, mouth corners, shoulders, elbows, wrists, hips
   const LOG_MAX = 20000;
   const log = { on: false, frames: [], marks: [], t0: 0 };
   function setLogging(on) {
