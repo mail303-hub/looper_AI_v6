@@ -170,7 +170,7 @@
   function applyPose() {
     if (!Pose) return;
     const ai = S.prefs.input === 'ai';
-    const modeOk = S.mode === 'live' || S.mode === 'pending' || (ai && S.prefs.auto && S.mode === 'playback');
+    const modeOk = S.mode === 'live' || S.mode === 'pending' || (ai && S.mode === 'playback');   // AI_trig also watches while a clip plays
     const want = (S.prefs.poseOn || ai) && modeOk && S.running;
     applyPoseConfig();
     Pose.setOverlay(S.prefs.poseOn && S.mode !== 'playback');
@@ -2428,7 +2428,15 @@
     // a detected release acts like a mic / BT / PHONE signal (same lockout, Sync offset, AUTO MODE rules)
     if (Pose) Pose.onEvent((ev) => {
       log('AI pose event', ev.type);
-      if (ev.type === 'release' && S.prefs.input === 'ai') onRemoteSignal('ai', S.ai);
+      if (S.prefs.input !== 'ai') return;
+      // full draw while a clip is playing: stop the replay and show the live view (the release then records the new shot)
+      if (ev.type === 'full_draw' && S.mode === 'playback' && !S.capturing && !S.saving && !S.sharing) {
+        log('AI full draw: back to live');
+        discardClip();
+        returnToLive();
+        return;
+      }
+      if (ev.type === 'release') onRemoteSignal('ai', S.ai);
     });
     $('ph-room').addEventListener('change', commitRoom);
     $('ph-room').addEventListener('blur', commitRoom);
