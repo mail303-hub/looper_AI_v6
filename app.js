@@ -1,5 +1,5 @@
 /*
- * DD Archery Looper v2 (PWA)
+ * DD Archery Looper v6 (PWA)
  *
  * Camera frames -> WebCodecs H.264 encoder -> in-memory ring buffer of encoded frames.
  * Audio -> AudioWorklet (audio thread) detects a sharp sound -> trigger time T.
@@ -9,6 +9,8 @@
  * exact trimming) and looped in a <video>.
  * AUTO MODE: signals are also accepted while a clip is playing; the next
  * signal replaces the playing clip with the new one.
+ * Trigger input: MIC (AudioWorklet), BT (Web Bluetooth "MOT") or PHONE (a second phone running
+ * the MOTION SENDER screen publishes "MOT" over MQTT/WSS, see phone.js).
  *
  * Nothing is written to disk while rolling: the ring buffer lives in memory and
  * is trimmed continuously, so storage cannot grow.
@@ -18,6 +20,7 @@
 
   const Core = self.DDCore;
   const Mp4 = self.DDMp4;
+  const Phone = self.DDPhone;
   const Pose = self.DDPose;
   const $ = (id) => document.getElementById(id);
 
@@ -39,7 +42,10 @@
   // first: the service of the Seeed XIAO MG24 / Silicon Labs Arduino BLE examples (notify characteristic 61a885a4-...)
   // fixed (not editable): a wrong value would make the BT module impossible to connect
   const BT_SERVICES = 'de8a5aac-a99b-c315-0c80-60d4cbb51224, ' + NUS_SERVICE + ', 4880c12c-fdcb-4077-8920-a450d7f9b907, ffe0, 49535343-fe7d-4ae5-8fa9-9fafd205e455, fff0';
-  const BT_LOCKOUT_MS = 1500;   // one signal per shot, like the microphone
+  const BT_LOCKOUT_MS = 1500;   // one signal per shot, like the microphone (BT and PHONE)
+  const MOTION_MIN = 5, MOTION_MAX = 100, MOTION_DEFAULT = 15;  // MOTION SENDER threshold, m/s²
+  const GEAR_HOLD_MS = 800;     // sender lock screen: hold the gear this long to open the settings
+  const SND_AUTOLOCK_MS = 20000; // sender settings left open without a touch lock again
   const EDGE_ZONE = 0.25;       // left/right quarter of the screen = frame step, middle half = play/pause
   const GRID_COLORS = {
     black: [0, 0, 0], white: [255, 255, 255], red: [255, 40, 40], green: [0, 220, 0], blue: [30, 100, 255]
@@ -67,7 +73,10 @@
     wake: null,
     thr: 0.944,           // default = least sensitive (about -0.5 dBFS): only very loud shots
     offsetMs: 0,
-    prefs: { buf: 2, split: 0.5, cam: null, zoomOn: false, gridOn: false, gridSize: 100, gridInt: 5, gridColor: 'white', auto: false, orient: 'landscape', input: 'mic', slomoFps: SLOMO_DEFAULT, btName: BT_DEFAULT_NAME, fps: FPS_DEFAULT, poseOn: false, poseLog: false },
+    prefs: { buf: 2, split: 0.5, cam: null, zoomOn: false, gridOn: false, gridSize: 100, gridInt: 5, gridColor: 'white', auto: false, orient: 'landscape', input: 'mic', slomoFps: SLOMO_DEFAULT, btName: BT_DEFAULT_NAME, fps: FPS_DEFAULT,
+      room: '', mqttUrl: Phone.DEFAULT_URL, sndRoom: '', motionThr: MOTION_DEFAULT, sensorThr: MOTION_DEFAULT,
+      poseOn: false, poseLog: false, aiMode: 'wrist', aiThr: 2.0 },
+    ai: { lastSig: 0 },   // AI_trig (pose) signal lockout, same role as S.bt / S.ph
     zoom: { s: 1, tx: 0, ty: 0 },
     cams: [], camId: null,
     panelOpen: false,
@@ -85,6 +94,10 @@
     slomo: false, slomoTimer: 0, slomoF: 0,
     fpsMax: null, fpsActual: null,   // what the camera reports (null = unknown)
     bt: { dev: null, server: null, state: 'off', battery: null, chars: [], want: false, busy: false, retryTimer: 0, lastSig: 0, bound: null },
+    // PHONE trigger (this phone = looper, receives MOT over MQTT)
+    ph: { lastPeak: null, client: null, state: 'off', want: false, busy: false, retryTimer: 0, tries: 0, lastSig: 0, lastA: null, lastRxAt: 0, err: '' },
+    // MOTION SENDER (this phone = sensor, publishes MOT)
+    snd: { active: false, busy: false, client: null, det: null, wake: null, retryTimer: 0, seen: false, noData: false, sent: 0, peak: 0, shotPeak: 0, shotUntil: 0, uiAt: 0, locked: false, lockTimer: 0, flashTimer: 0 },
     timers: []
   };
 
@@ -140,6 +153,30 @@
     show('playview', playback);
     applyGrid();
     updateStatus();
+    applyPose();
+  }
+
+  // ---- pose estimation / AI_trig ---------------------------------------------
+  function applyPoseConfig() {
+    if (!Pose) return;
+    const c = Pose.config, p = S.prefs;
+    c.mode = p.aiMode;
+    c.releaseSpeed = p.aiThr;
+    c.elbowSpeed = Math.round(p.aiThr * 75) / 100;   // elbow: 75 % of the wrist threshold
+    c.interval = p.input === 'ai' ? 33 : 66;          // the release movement is short: sample faster in AI_trig mode
+  }
+
+  // pose runs on the live view when the overlay switch or AI_trig is on (also while a clip plays in AUTO MODE)
+  function applyPose() {
+    if (!Pose) return;
+    const ai = S.prefs.input === 'ai';
+    const modeOk = S.mode === 'live' || S.mode === 'pending' || (ai && S.prefs.auto && S.mode === 'playback');
+    const want = (S.prefs.poseOn || ai) && modeOk && S.running;
+    applyPoseConfig();
+    Pose.setOverlay(S.prefs.poseOn && S.mode !== 'playback');
+    if (want && !Pose.isRunning()) Pose.start(S.live, $('pose'), (t) => { $('pose-info').textContent = t; updateStatus(); });
+    else if (!want && Pose.isRunning()) Pose.stop();
+    else if (!want) $('pose-info').textContent = (S.prefs.poseOn || ai) ? 'On (runs on the live view).' : 'Off.';
   }
 
   function updateStatus() {
@@ -149,6 +186,8 @@
       if (S.calib || S.panelOpen) txt = '';
       else if (S.switching) txt = 'SWITCHING CAMERA';
       else if (S.prefs.input === 'bt' && S.bt.state !== 'connected') txt = S.bt.state === 'connecting' ? 'BT CONNECTING' : (S.bt.state === 'lost' ? 'BT RECONNECTING' : 'BT NOT CONNECTED');
+      else if (S.prefs.input === 'phone' && S.ph.state !== 'connected') txt = S.ph.state === 'connecting' ? 'PHONE CONNECTING' : (S.ph.state === 'lost' ? 'PHONE RECONNECTING' : 'PHONE NOT CONNECTED');
+      else if (S.prefs.input === 'ai' && Pose && !Pose.ready()) txt = Pose.error() ? 'AI MODEL ERROR' : 'AI LOADING';
       else if (S.prefs.input === 'mic' && !S.micOk) txt = 'MIC OFF';
       else if (S.lastFrameAt && performance.now() - S.lastFrameAt > 3000) txt = 'NO CAMERA FRAMES';
       else if (ringSpan() < armSpanMs()) txt = 'WARMING UP';
@@ -166,25 +205,18 @@
     ab.classList.toggle('rec', arec);
     ab.style.display = at ? '' : 'none';
     updateTopbar();
-    applyPose();
   }
 
-  // pose estimation overlay: only on the live view and only when the switch is on
-  function applyPose() {
-    if (!Pose) return;
-    const want = S.prefs.poseOn && (S.mode === 'live' || S.mode === 'pending') && S.running;
-    if (want && !Pose.isRunning()) Pose.start(S.live, $('pose'), (t) => { $('pose-info').textContent = t; });
-    else if (!want && Pose.isRunning()) Pose.stop();
-    else if (!want) $('pose-info').textContent = S.prefs.poseOn ? 'On (shown on the live view).' : 'Off.';
-  }
-
-  // top centre: input source (MIC / BT) and the battery value received over BT
+  // top centre: input source (MIC / BT / PHONE), the battery value received over BT, the PHONE room code
   function updateTopbar() {
     const bt = S.prefs.input === 'bt';
+    const ph = S.prefs.input === 'phone';
+    const ai = S.prefs.input === 'ai';
+    const aiOk = ai && Pose && Pose.ready();
     const src = $('src-text');
-    src.textContent = bt ? (S.bt.state === 'connected' ? 'BT' : 'BT ✕') : 'MIC';
-    src.className = bt ? (S.bt.state === 'connected' ? 'good' : 'bad') : '';
-    $('bat-text').textContent = bt && S.bt.battery !== null ? 'bat ' + S.bt.battery + '%' : '';
+    src.textContent = ai ? (aiOk ? 'AI' : 'AI ✕') : bt ? (S.bt.state === 'connected' ? 'BT' : 'BT ✕') : ph ? (S.ph.state === 'connected' ? 'PHONE' : 'PHONE ✕') : 'MIC';
+    src.className = ai ? (aiOk ? 'good' : 'bad') : bt ? (S.bt.state === 'connected' ? 'good' : 'bad') : ph ? (S.ph.state === 'connected' ? 'good' : 'bad') : '';
+    $('bat-text').textContent = ai ? (aiOk ? Pose.state().replace('_', ' ') : '') : bt && S.bt.battery !== null ? 'bat ' + S.bt.battery + '%' : ph ? 'ROOM ' + S.prefs.room + (S.ph.lastPeak !== null ? ' · peak ' + S.ph.lastPeak.toFixed(1) : '') : '';
     const hb = $('btn-bt-hud');
     if (hb) show('btn-bt-hud', bt && S.mode === 'live' && S.bt.state !== 'connected' && S.bt.state !== 'connecting');
   }
@@ -206,8 +238,6 @@
         d.zoomOn = !!p.zoomOn;
         d.gridOn = !!p.gridOn;
         d.auto = !!p.auto;
-        d.poseOn = !!p.poseOn;
-        d.poseLog = !!p.poseLog;
         d.orient = p.orient === 'portrait' ? 'portrait' : 'landscape';
         if (isFinite(p.gridSize)) d.gridSize = Core.clamp(Math.round(p.gridSize), GRID_MIN, GRID_MAX);
         if (isFinite(p.gridInt)) d.gridInt = Core.clamp(Math.round(p.gridInt), 1, 10);
@@ -215,13 +245,24 @@
         if (isFinite(p.slomoFps)) d.slomoFps = Core.clamp(Math.round(p.slomoFps), SLOMO_MIN, SLOMO_MAX);
         if (typeof p.btName === 'string' && p.btName.trim()) d.btName = p.btName.trim().slice(0, 32);
         d.fps = p.fps === 60 ? 60 : 30;
-        d.input = p.input === 'bt' && btSupported() ? 'bt' : 'mic';
+        d.input = p.input === 'bt' && btSupported() ? 'bt' : p.input === 'phone' ? 'phone' : p.input === 'ai' ? 'ai' : 'mic';
+        d.poseOn = !!p.poseOn;
+        d.poseLog = !!p.poseLog;
+        d.aiMode = p.aiMode === 'elbow' || p.aiMode === 'both' ? p.aiMode : 'wrist';
+        if (isFinite(p.aiThr)) d.aiThr = Core.clamp(Math.round(p.aiThr * 10) / 10, 0.5, 6);
+        if (typeof p.room === 'string') d.room = Phone.cleanRoom(p.room);
+        if (typeof p.mqttUrl === 'string' && p.mqttUrl.trim()) d.mqttUrl = p.mqttUrl.trim().slice(0, 200);
+        if (typeof p.sndRoom === 'string') d.sndRoom = Phone.cleanRoom(p.sndRoom);
+        if (isFinite(p.motionThr)) d.motionThr = p.motionThr >= MOTION_MIN && p.motionThr <= MOTION_MAX ? Math.round(p.motionThr * 2) / 2 : MOTION_DEFAULT; // outside the range (older version): back to the default
+        if (isFinite(p.sensorThr)) d.sensorThr = p.sensorThr >= MOTION_MIN && p.sensorThr <= MOTION_MAX ? Math.round(p.sensorThr * 2) / 2 : MOTION_DEFAULT;
       }
       if (S.prefs.zoomOn) {
         const z = JSON.parse(localStorage.getItem(LS_ZOOM) || 'null');
         if (z && isFinite(z.s) && isFinite(z.tx) && isFinite(z.ty)) S.zoom = { s: z.s, tx: z.tx, ty: z.ty };
       }
     } catch (e) { /* storage unavailable or corrupt: use defaults */ }
+    // every looper phone gets its own random room code once; it stays the same until "New code"
+    if (!Phone.validRoom(S.prefs.room)) { S.prefs.room = Phone.randomRoom(); savePrefs(); }
     refreshSettingsUi();
   }
 
@@ -256,9 +297,6 @@
     $('grid-int-text').textContent = String(p.gridInt);
     Object.keys(GRID_COLORS).forEach((c) => $('gc-' + c).classList.toggle('sel', p.gridColor === c));
     $('auto-on').checked = p.auto;
-    $('pose-on').checked = p.poseOn;
-    $('pose-log-on').checked = p.poseLog;
-    if (Pose) { Pose.setLogging(p.poseLog); $('pose-log-info').textContent = p.poseLog ? 'Log: recording, ' + Pose.logInfo() + '.' : 'Log: off (' + Pose.logInfo() + ' kept).'; }
     $('ori-landscape').classList.toggle('sel', p.orient === 'landscape');
     $('ori-portrait').classList.toggle('sel', p.orient === 'portrait');
     $('slomo-slider').value = String(p.slomoFps);
@@ -269,12 +307,33 @@
     $('fps-info').textContent = 'Measured: ' + (S.fps ? S.fps.toFixed(0) + ' fps' : '–') + (S.dropped ? ' (dropped ' + S.dropped + ')' : '') + '\nCamera: ' + (S.fpsActual ? Math.round(S.fpsActual) + ' fps now' : 'fps unknown') +
       (S.fpsMax !== null ? ', max ' + Math.round(S.fpsMax) + ' fps' : '') + (S.fpsMax !== null && S.fpsMax < 59 ? ' (60 fps not supported)' : '');
     const bt = p.input === 'bt';
-    $('in-mic').classList.toggle('sel', !bt);
+    const ph = p.input === 'phone';
+    const ai = p.input === 'ai';
+    const notMic = bt || ph || ai;
+    $('in-mic').classList.toggle('sel', !notMic);
     $('in-bt').classList.toggle('sel', bt);
+    $('in-phone').classList.toggle('sel', ph);
+    $('in-ai').classList.toggle('sel', ai);
+    $('pose-on').checked = p.poseOn;
+    $('pose-log-on').checked = p.poseLog;
+    ['wrist', 'elbow', 'both'].forEach((m) => $('ai-m-' + m).classList.toggle('sel', p.aiMode === m));
+    $('ai-thr').value = String(p.aiThr);
+    $('ai-thr-text').textContent = p.aiThr.toFixed(1);
+    if (Pose) { Pose.setLogging(p.poseLog); $('pose-log-info').textContent = p.poseLog ? 'Log: recording, ' + Pose.logInfo() + '.' : 'Log: off (' + Pose.logInfo() + ' kept).'; }
     if (document.activeElement !== $('bt-name')) $('bt-name').value = p.btName;
-    $('btn-calib').disabled = bt;
-    $('thr-slider').disabled = bt;
-    $('sec-mic').classList.toggle('off', bt);
+    $('btn-calib').disabled = notMic;
+    $('thr-slider').disabled = notMic;
+    $('sec-mic').classList.toggle('off', notMic);
+    if (document.activeElement !== $('ph-room')) $('ph-room').value = p.room;
+    if (document.activeElement !== $('ph-url')) $('ph-url').value = p.mqttUrl;
+    $('ph-sthr').value = String(p.sensorThr);
+    $('ph-sthr-text').textContent = p.sensorThr.toFixed(1) + ' m/s²';
+    $('btn-ph-connect').textContent = !ph ? 'Use PHONE trigger' : S.ph.want ? 'Disconnect' : 'Connect';
+    const lastMot = S.ph.lastRxAt ? '\nLast MOT: ' + new Date(S.ph.lastRxAt).toLocaleTimeString() + (S.ph.lastA !== null ? ' (' + S.ph.lastA.toFixed(1) + ' m/s²)' : '') +
+      (S.ph.lastPeak !== null ? '\nLast peak on the sensor: ' + S.ph.lastPeak.toFixed(1) + ' m/s² (threshold ' + p.sensorThr.toFixed(1) + ')' : '') : '';
+    $('ph-info').textContent = !ph ? 'Phone trigger off.'
+      : ({ off: 'Not connected.', connecting: 'Connecting…', connected: 'Connected, room ' + p.room + '. Waiting for MOT.', lost: 'Connection lost, retrying…' }[S.ph.state] || '') +
+        (S.ph.state !== 'connected' && S.ph.err ? '\n' + S.ph.err : '') + lastMot;
     const btn = $('btn-bt-connect');
     btn.disabled = !bt || !btSupported();
     btn.textContent = S.bt.state === 'connected' ? 'Reconnect / choose device' : 'Connect BT';
@@ -758,7 +817,7 @@
   }
 
   async function onTrigger(T, peak, src) {
-    if (Pose) Pose.mark(src === 'bt' ? 'bt_trigger' : 'mic_trigger', T);
+    if (Pose) Pose.mark((src || 'mic') + '_trigger', T);
     const gen = S.gen;
     const pre = preMs(), post = postMs(); // fixed for this event
     const auto = S.mode === 'playback'; // AUTO MODE: signal arrived while a clip was playing
@@ -766,7 +825,7 @@
     if (!auto) setMode('pending');
     updateArming(); // disarm
     updateStatus();
-    log((src === 'bt' ? 'BT trigger T=' : 'audio trigger T=') + T.toFixed(1), src === 'bt' ? '' : 'peak ' + Core.toDb(peak).toFixed(1) + ' dB thr ' + Core.toDb(S.thr).toFixed(1) + ' dB', 'window -' + pre + '/+' + post + ' ms', auto ? '(auto mode, during playback)' : '');
+    log((src ? src.toUpperCase() + ' trigger T=' : 'audio trigger T=') + T.toFixed(1), src ? '' : 'peak ' + Core.toDb(peak).toFixed(1) + ' dB thr ' + Core.toDb(S.thr).toFixed(1) + ' dB', 'window -' + pre + '/+' + post + ' ms', auto ? '(auto mode, during playback)' : '');
     try {
       await waitForPost(T, gen, post);
       if (S.gen !== gen) return;
@@ -1458,14 +1517,17 @@
     if (hit) onBtSignal();
   }
 
-  function onBtSignal() {
+  function onBtSignal() { onRemoteSignal('bt', S.bt); }
+
+  // BT / PHONE signal: same as a microphone trigger at the moment it arrives (+ Sync offset)
+  function onRemoteSignal(src, st) {
     const now = performance.now();
-    if (S.prefs.input !== 'bt' || !S.running) return;
-    if (!listening() || S.capturing || S.calib || S.panelOpen || S.switching) { log('bt signal ignored (not listening)'); return; }
-    if (ringSpan() < armSpanMs()) { log('bt signal ignored (buffer warming up)'); return; }
-    if (now - S.bt.lastSig < BT_LOCKOUT_MS) return;
-    S.bt.lastSig = now;
-    onTrigger(now + S.offsetMs, 0, 'bt');
+    if (S.prefs.input !== src || !S.running) return;
+    if (!listening() || S.capturing || S.calib || S.panelOpen || S.switching) { log(src + ' signal ignored (not listening)'); return; }
+    if (ringSpan() < armSpanMs()) { log(src + ' signal ignored (buffer warming up)'); return; }
+    if (now - st.lastSig < BT_LOCKOUT_MS) return;
+    st.lastSig = now;
+    onTrigger(now + S.offsetMs, 0, src);
   }
 
   function onBtValue(e) {
@@ -1659,12 +1721,15 @@
     S.prefs.input = m;
     savePrefs();
     if (S.running) {
-      if (m === 'bt') { btConnect(true); stopMic(); }   // the chooser must open straight from the tap
-      else { btDisconnect(); startMic(); }
+      if (m === 'bt') { phoneDisconnect(); btConnect(true); stopMic(); }   // the chooser must open straight from the tap
+      else if (m === 'phone') { btDisconnect(); stopMic(); phoneConnect(); }
+      else if (m === 'ai') { btDisconnect(); phoneDisconnect(); stopMic(); }
+      else { btDisconnect(); phoneDisconnect(); startMic(); }
     }
     refreshSettingsUi();
     updateArming();
     updateStatus();
+    applyPose();
     log('input', m);
   }
 
@@ -1678,6 +1743,476 @@
     if (changed && S.bt.dev) { btDisconnect(); S.bt.dev = null; }
     refreshSettingsUi();
     updateStatus();
+  }
+
+  // ---- trigger input: PHONE (MOT from a second phone over MQTT/WSS) ---------
+  function phSetState(st) {
+    S.ph.state = st;
+    refreshSettingsUi();
+    updateStatus();
+  }
+
+  function phClearRetry() { clearTimeout(S.ph.retryTimer); S.ph.retryTimer = 0; }
+
+  function phScheduleRetry(gen) {
+    phClearRetry();
+    if (!S.ph.want || !S.running || S.prefs.input !== 'phone') return;
+    const ms = Math.min(15000, 2500 * Math.pow(2, S.ph.tries)); // 2.5, 5, 10, 15, 15 … s
+    S.ph.tries++;
+    S.ph.retryTimer = setTimeout(() => { if (S.gen === gen) phoneConnect(); }, ms);
+  }
+
+  function onPhoneMessage(topic, payload) {
+    if (topic === Phone.cfgTopicFor(S.prefs.room)) { onLooperConfig(payload); return; }
+    if (topic !== Phone.topicFor(S.prefs.room)) return;
+    const pk = Phone.parsePeak(payload);
+    if (pk) {
+      S.ph.lastPeak = pk.p;
+      log('phone peak', pk.p);
+      updateTopbar();
+      if (S.panelOpen) refreshSettingsUi();
+      return;
+    }
+    const m = Phone.parseTrigger(payload);
+    log('phone rx', JSON.stringify(payload).slice(0, 120));
+    if (!m) return;
+    S.ph.lastA = m.a;
+    S.ph.lastRxAt = Date.now();
+    if (S.panelOpen) refreshSettingsUi();
+    onRemoteSignal('phone', S.ph);
+  }
+
+  async function phoneConnect() {
+    if (!S.running || S.prefs.input !== 'phone' || S.ph.busy) return;
+    const gen = S.gen;
+    const room = S.prefs.room, url = S.prefs.mqttUrl;
+    S.ph.want = true;
+    phClearRetry();
+    if (!Phone.validRoom(room)) { S.ph.want = false; S.ph.err = 'Room code must have at least ' + Phone.ROOM_MIN + ' letters/digits.'; phSetState('off'); return; }
+    S.ph.busy = true;
+    phSetState(S.ph.state === 'lost' ? 'lost' : 'connecting');
+    let client = null, again = false;
+    try {
+      client = await Phone.connect({
+        url: url,
+        subscribe: [Phone.topicFor(room), Phone.cfgTopicFor(room)],
+        onMessage: onPhoneMessage,
+        onClose: (reason) => {
+          if (S.ph.client !== client) return; // closed on purpose
+          S.ph.client = null;
+          log('phone trigger connection closed:', reason);
+          if (!S.ph.want || !S.running || S.prefs.input !== 'phone') return;
+          S.ph.err = 'Connection lost (' + reason + ').';
+          phSetState('lost');
+          phScheduleRetry(S.gen);
+        }
+      });
+      if (S.gen !== gen || !S.ph.want || S.prefs.input !== 'phone' || room !== S.prefs.room || url !== S.prefs.mqttUrl) {
+        client.close();
+        again = S.gen === gen && S.ph.want; // room / server changed meanwhile: connect again with the new values
+        return;
+      }
+      S.ph.client = client;
+      S.ph.tries = 0;
+      S.ph.err = '';
+      log('phone trigger connected', url, 'room', room);
+      phSetState('connected');
+      toast('PHONE connected, room ' + room, 'ok', 1800);
+    } catch (e) {
+      log('phone connect failed:', e && e.message);
+      if (S.gen === gen && S.ph.want && S.prefs.input === 'phone') {
+        if (!S.ph.err) toast('PHONE: ' + (e && e.message), 'err', 4000); // first failure only, then it retries quietly
+        S.ph.err = (e && e.message) || 'Connection failed.';
+        phSetState('lost');
+        phScheduleRetry(gen);
+      }
+    } finally {
+      S.ph.busy = false;
+      if (again) phoneConnect();
+    }
+  }
+
+  // new room code / server: drop the current connection and connect again
+  function phoneReconnect() {
+    if (!S.running || S.prefs.input !== 'phone') return;
+    const c = S.ph.client;
+    S.ph.client = null;
+    try { if (c) c.close(); } catch (e) { /* ignore */ }
+    S.ph.tries = 0;
+    S.ph.err = '';
+    phClearRetry();
+    phoneConnect();
+  }
+
+  function phoneDisconnect() {
+    S.ph.want = false;
+    phClearRetry();
+    const c = S.ph.client;
+    S.ph.client = null;
+    try { if (c) c.close(); } catch (e) { /* ignore */ }
+    S.ph.state = 'off';
+    S.ph.tries = 0;
+    S.ph.err = '';
+    refreshSettingsUi();
+    updateTopbar();
+  }
+
+  function commitRoom() {
+    const v = Phone.cleanRoom($('ph-room').value);
+    if (!Phone.validRoom(v)) {
+      toast('Room code needs at least ' + Phone.ROOM_MIN + ' letters/digits.', 'err', 3000);
+      $('ph-room').value = S.prefs.room;
+      return;
+    }
+    $('ph-room').value = v;
+    if (v === S.prefs.room) return;
+    S.prefs.room = v;
+    savePrefs();
+    log('phone room', v);
+    refreshSettingsUi();
+    updateTopbar();
+    phoneReconnect();
+  }
+
+  function commitMqttUrl() {
+    const v = Phone.cleanUrl($('ph-url').value).slice(0, 200);
+    $('ph-url').value = v;
+    if (v === S.prefs.mqttUrl) return;
+    S.prefs.mqttUrl = v;
+    savePrefs();
+    log('phone server', v);
+    refreshSettingsUi();
+    phoneReconnect();
+  }
+
+  // Sensor threshold is shared by both phones: either side publishes a retained CFG when it is changed there,
+  // both sides apply what they receive, so the last change wins and nothing is overwritten on (re)connect.
+  function onLooperConfig(payload) {
+    const m = Phone.parseConfig(payload);
+    if (!m) return;
+    const thr = Core.clamp(Math.round(m.thr * 2) / 2, MOTION_MIN, MOTION_MAX);
+    if (thr === S.prefs.sensorThr) return;
+    S.prefs.sensorThr = thr;
+    savePrefs();
+    log('sensor threshold from the room', thr);
+    refreshSettingsUi();
+  }
+
+  function sendSensorThr() {
+    const c = S.ph.client;
+    if (!c || !Phone.validRoom(S.prefs.room)) return false;
+    const ok = c.publish(Phone.cfgTopicFor(S.prefs.room), Phone.cfgPayload(S.prefs.sensorThr), true);
+    log('sensor threshold sent', S.prefs.sensorThr, ok ? '' : '(failed)');
+    return ok;
+  }
+
+  function setSensorThr(v, announce) {
+    S.prefs.sensorThr = Core.clamp(Math.round((parseFloat(v) || MOTION_DEFAULT) * 2) / 2, MOTION_MIN, MOTION_MAX);
+    savePrefs();
+    refreshSettingsUi();
+    const sent = sendSensorThr();
+    if (announce) toast('Sensor threshold ' + S.prefs.sensorThr.toFixed(1) + ' m/s²' + (sent ? '\nsent to the sensor phone' : '\nis sent when PHONE is connected'), sent ? 'ok' : null, 2200);
+  }
+
+  async function copyRoom() {
+    try { await navigator.clipboard.writeText(S.prefs.room); toast('Room code copied: ' + S.prefs.room, 'ok', 2000); }
+    catch (e) { toast('Copy not possible. Room code: ' + S.prefs.room, null, 4000); }
+  }
+
+  // ---- MOTION SENDER: this phone is the sensor --------------------------------
+  function sndStatus(text, kind) {
+    const el = $('snd-status');
+    el.textContent = text;
+    el.style.color = kind === 'err' ? '#ff8a80' : kind === 'ok' ? '#7ee787' : '';
+  }
+
+  function sndUi() {
+    const a = S.snd.active;
+    show('btn-snd-start', !a);
+    $('btn-snd-start').disabled = S.snd.busy;
+    $('btn-snd-stop').disabled = !a;
+    const open = !!(S.snd.client && S.snd.client.open);
+    $('btn-snd-test').disabled = !open;
+    show('btn-snd-hide', a);
+    $('snd-dot').classList.toggle('ok', open);
+    $('snd-lock-text').textContent = !open ? 'NOT CONNECTED' : S.snd.noData ? 'NO SENSOR DATA' : 'SENSOR ON';
+    $('snd-room').disabled = a;
+    $('snd-url').disabled = a;
+    $('btn-snd-url-reset').disabled = a;
+    $('snd-thr').value = String(S.prefs.motionThr);
+    $('snd-thr-text').textContent = S.prefs.motionThr.toFixed(1) + ' m/s²';
+  }
+
+  // While the sensor runs the screen is locked: black, every touch ignored, only a small gear in the
+  // corner (held GEAR_HOLD_MS) opens the settings again, so a phone held in the hand or a pocket cannot press buttons.
+  function sndLock(on) {
+    clearTimeout(S.snd.lockTimer);
+    S.snd.locked = !!on && S.snd.active;
+    show('snd-lock', S.snd.locked);
+    show('snd-gear-hint', false);
+    if (S.snd.locked) {
+      try { if (document.activeElement) document.activeElement.blur(); } catch (e) { /* ignore */ }
+      sndEnterFullscreen();
+    }
+    else sndArmAutoLock();
+  }
+
+  // Full screen hides the browser bars and the system buttons that a hand or pocket would press.
+  // It needs a tap: requested from START SENSOR / Hide / any touch on the lock screen. Stays on until the sensor stops.
+  function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
+  function fsSupported() { const de = document.documentElement; return !!(de.requestFullscreen || de.webkitRequestFullscreen); }
+
+  async function sndEnterFullscreen(force) {
+    if (!S.snd.active && !force) return;
+    const de = document.documentElement;
+    if (!fsElement()) {
+      const req = de.requestFullscreen || de.webkitRequestFullscreen;
+      if (!req) return;
+      try { await req.call(de, { navigationUI: 'hide' }); log('sender fullscreen on'); }
+      catch (e) { log('sender fullscreen failed:', e && e.message); return; }
+    }
+    try {
+      const so = screen.orientation;
+      if (so && so.lock && so.type) await so.lock(/^landscape/.test(so.type) ? 'landscape' : 'portrait');
+    } catch (e) { /* orientation lock not available: fine */ }
+  }
+
+  function sndExitFullscreen() {
+    try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch (e) { /* ignore */ }
+    if (!fsElement()) return;
+    const ex = document.exitFullscreen || document.webkitExitFullscreen;
+    try { const r = ex && ex.call(document); if (r && r.catch) r.catch(() => {}); } catch (e) { /* ignore */ }
+  }
+
+  function sndArmAutoLock() {
+    clearTimeout(S.snd.lockTimer);
+    if (S.snd.active && !S.snd.locked) S.snd.lockTimer = setTimeout(() => sndLock(true), SND_AUTOLOCK_MS);
+  }
+
+  function sndFlash() {
+    const d = $('snd-dot');
+    d.classList.add('flash');
+    clearTimeout(S.snd.flashTimer);
+    S.snd.flashTimer = setTimeout(() => d.classList.remove('flash'), 300);
+  }
+
+  function setupSenderLock() {
+    const g = $('btn-snd-gear');
+    let t = 0, hintT = 0;
+    const cancel = () => { clearTimeout(t); t = 0; g.classList.remove('holding'); };
+    g.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      cancel();
+      g.classList.add('holding');
+      t = setTimeout(() => { t = 0; cancel(); sndLock(false); log('sender settings opened'); }, GEAR_HOLD_MS);
+    });
+    g.addEventListener('pointerup', () => {
+      if (!t) return;
+      cancel(); // released too early: only a hint
+      show('snd-gear-hint', true);
+      clearTimeout(hintT);
+      hintT = setTimeout(() => show('snd-gear-hint', false), 1500);
+    });
+    g.addEventListener('pointercancel', cancel);
+    g.addEventListener('pointerleave', cancel);
+    const lock = $('snd-lock');
+    ['pointerdown', 'touchstart', 'contextmenu', 'dblclick'].forEach((ev) =>
+      lock.addEventListener(ev, (e) => { if (!g.contains(e.target)) e.preventDefault(); }, { passive: false }));
+    // full screen was left (system back gesture) or refused without a tap: any touch on the lock screen asks again.
+    // pointerup, not pointerdown: on touch screens the browser counts the tap as a user gesture only when the finger lifts
+    lock.addEventListener('pointerup', () => { if (!fsElement()) sndEnterFullscreen(); });
+    // any touch in the open settings keeps them open a little longer
+    $('sender').addEventListener('pointerdown', () => { if (!S.snd.locked) sndArmAutoLock(); }, true);
+    $('sender').addEventListener('input', () => { if (!S.snd.locked) sndArmAutoLock(); }, true);
+  }
+
+  function openSender() {
+    if (S.running || S.starting) return;
+    $('snd-room').value = S.prefs.sndRoom;
+    $('snd-url').value = S.prefs.mqttUrl;
+    show('start', false);
+    show('sender', true);
+    // iPhone Safari has no full screen for web pages; a Home Screen app is the closest (no browser bars)
+    show('snd-fs-hint', !fsSupported() && !window.navigator.standalone && !matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches);
+    sndUi();
+    log('motion sender screen');
+  }
+
+  function closeSender() {
+    stopSender('');
+    show('sender', false);
+    show('start', true);
+  }
+
+  async function sndAcquireWake() {
+    try {
+      if (S.snd.active && 'wakeLock' in navigator && !S.snd.wake) {
+        S.snd.wake = await navigator.wakeLock.request('screen');
+        S.snd.wake.addEventListener('release', () => { S.snd.wake = null; });
+      }
+    } catch (e) { log('sender wake lock unavailable', e && e.message); }
+  }
+
+  async function startSender() {
+    if (S.snd.active || S.snd.busy) return;
+    const room = Phone.cleanRoom($('snd-room').value);
+    $('snd-room').value = room;
+    S.prefs.sndRoom = room;
+    S.prefs.mqttUrl = Phone.cleanUrl($('snd-url').value).slice(0, 200);
+    $('snd-url').value = S.prefs.mqttUrl;
+    savePrefs();
+    if (!Phone.validRoom(room)) { sndStatus('Enter the room code shown on the looper phone (at least ' + Phone.ROOM_MIN + ' letters/digits).', 'err'); return; }
+    if (!window.isSecureContext) { sndStatus('The motion sensor needs a secure (https) page.', 'err'); return; }
+    if (!('DeviceMotionEvent' in window)) { sndStatus('This browser has no motion sensor support (DeviceMotionEvent).', 'err'); return; }
+    S.snd.busy = true;
+    // full screen and the iOS motion permission both need the tap: ask for both before the first await
+    sndEnterFullscreen(true);
+    const perm = typeof DeviceMotionEvent.requestPermission === 'function' ? DeviceMotionEvent.requestPermission() : null;
+    sndUi();
+    try {
+      if (perm) {
+        const r = await perm;
+        if (r !== 'granted') throw new Error('Motion sensor permission denied.\nAllow "Motion & Orientation Access" for this site and try again.');
+      }
+      S.snd.active = true;
+      S.snd.seen = false;
+      S.snd.noData = false;
+      S.snd.sent = 0;
+      S.snd.peak = 0;
+      S.snd.shotPeak = 0; S.snd.shotUntil = 0;
+      $('snd-peak').textContent = 'Last peak: –';
+      S.snd.det = Phone.MotionDetector({ threshold: S.prefs.motionThr, minGapMs: 1000 });
+      window.addEventListener('devicemotion', onDeviceMotion, { passive: true });
+      sndAcquireWake();
+      sndStatus('Connecting…');
+      sndConnect();
+      sndLock(true);
+      setTimeout(() => {
+        if (S.snd.active && !S.snd.seen) {
+          S.snd.noData = true;
+          sndStatus('No data from the motion sensor.\nThis device/browser may have no accelerometer (PC). "Send test" still works.', 'err');
+          sndUi();
+        }
+      }, 3000);
+    } catch (e) {
+      log('sender start failed', e && e.message);
+      stopSender((e && e.message) || 'Could not start.', 'err');
+    } finally {
+      S.snd.busy = false;
+      sndUi();
+    }
+  }
+
+  async function sndConnect() {
+    if (!S.snd.active || S.snd.client) return;
+    clearTimeout(S.snd.retryTimer);
+    const room = S.prefs.sndRoom;
+    let client = null;
+    try {
+      client = await Phone.connect({
+        url: S.prefs.mqttUrl,
+        subscribe: Phone.cfgTopicFor(room),
+        onMessage: onSenderConfig,
+        onClose: (reason) => {
+          if (S.snd.client !== client) return;
+          S.snd.client = null;
+          log('sender connection closed:', reason);
+          sndUi();
+          if (!S.snd.active) return;
+          sndStatus('Connection lost, reconnecting…', 'err');
+          S.snd.retryTimer = setTimeout(sndConnect, 3000);
+        }
+      });
+      if (!S.snd.active || room !== S.prefs.sndRoom) { client.close(); return; }
+      S.snd.client = client;
+      log('sender connected, room', room);
+      sndStatus('Connected, room ' + room + '.\nWaiting for motion…', 'ok');
+    } catch (e) {
+      log('sender connect failed', e && e.message);
+      if (!S.snd.active) return;
+      sndStatus('Not connected: ' + (e && e.message) + '\nRetrying…', 'err');
+      S.snd.retryTimer = setTimeout(sndConnect, 4000);
+    } finally {
+      sndUi();
+    }
+  }
+
+  // threshold set on the looper phone (⚙ → Phone trigger → Sensor threshold)
+  function onSenderConfig(topic, payload) {
+    if (topic !== Phone.cfgTopicFor(S.prefs.sndRoom)) return;
+    const m = Phone.parseConfig(payload);
+    log('sender config rx', JSON.stringify(payload).slice(0, 120));
+    if (!m) return;
+    const thr = Core.clamp(Math.round(m.thr * 2) / 2, MOTION_MIN, MOTION_MAX);
+    if (thr === S.prefs.motionThr) return;
+    S.prefs.motionThr = thr;
+    if (S.snd.det) S.snd.det.threshold = thr;
+    savePrefs();
+    sndUi();
+    sndStatus('Threshold set from the looper device: ' + thr.toFixed(1) + ' m/s²', 'ok');
+  }
+
+  // a change made on this sensor phone is shared too, so the looper shows it and does not undo it
+  function sndShareThr() {
+    const c = S.snd.client;
+    if (!c || !Phone.validRoom(S.prefs.sndRoom)) return;
+    c.publish(Phone.cfgTopicFor(S.prefs.sndRoom), Phone.cfgPayload(S.prefs.motionThr), true);
+    log('sender threshold shared', S.prefs.motionThr);
+  }
+
+  function sndSend(a, test) {
+    const c = S.snd.client;
+    const t = new Date().toLocaleTimeString();
+    if (c && c.publish(Phone.topicFor(S.prefs.sndRoom), Phone.motPayload(a))) {
+      S.snd.sent++;
+      sndFlash();
+      log('sender MOT', a.toFixed(2), test ? '(test)' : '');
+      sndStatus((test ? 'Test MOT sent' : 'MOT sent') + ' · ' + a.toFixed(1) + ' m/s² · ' + t + '\n(' + S.snd.sent + ' sent)', 'ok');
+      return true;
+    }
+    sndStatus('Movement detected, but not connected: MOT not sent (' + t + ').', 'err');
+    return false;
+  }
+
+  function onDeviceMotion(e) {
+    if (!S.snd.active || !S.snd.det) return;
+    const now = performance.now();
+    const r = S.snd.det.sample(e.acceleration, e.accelerationIncludingGravity, now);
+    if (!r) return;
+    if (!S.snd.seen) { S.snd.seen = true; S.snd.noData = false; sndUi(); if (S.snd.client) sndStatus('Connected, room ' + S.prefs.sndRoom + '.\nWaiting for motion…', 'ok'); }
+    S.snd.peak = Math.max(r.level, S.snd.peak * 0.9);
+    if (r.fire) { S.snd.shotPeak = r.level; S.snd.shotUntil = now + 1000; sndSend(r.level, false); }
+    else if (now < S.snd.shotUntil && r.level > S.snd.shotPeak) S.snd.shotPeak = r.level;
+    if (S.snd.shotUntil && now >= S.snd.shotUntil) { // highest level within 1 s after the trigger
+      S.snd.shotUntil = 0;
+      $('snd-peak').textContent = 'Last peak: ' + S.snd.shotPeak.toFixed(1) + ' m/s² (threshold ' + S.prefs.motionThr.toFixed(1) + ')';
+      log('sender shot peak', S.snd.shotPeak.toFixed(1));
+      const c = S.snd.client;
+      if (c) c.publish(Phone.topicFor(S.prefs.sndRoom), Phone.peakPayload(S.snd.shotPeak));
+    }
+    if (now - S.snd.uiAt > 80) { // the sensor may run at 60-100 Hz: keep the UI light
+      S.snd.uiAt = now;
+      $('snd-level').textContent = 'Motion: ' + r.level.toFixed(1) + ' m/s²';
+      $('snd-fill').style.width = Core.clamp(S.snd.peak / (S.prefs.motionThr * 1.8), 0, 1) * 100 + '%';
+    }
+  }
+
+  function stopSender(msg, kind) {
+    S.snd.active = false;
+    sndLock(false);
+    sndExitFullscreen();
+    window.removeEventListener('devicemotion', onDeviceMotion);
+    clearTimeout(S.snd.retryTimer);
+    const c = S.snd.client;
+    S.snd.client = null;
+    try { if (c) c.close(); } catch (e) { /* ignore */ }
+    try { if (S.snd.wake) S.snd.wake.release().catch(() => {}); } catch (e) { /* ignore */ }
+    S.snd.wake = null;
+    S.snd.det = null;
+    $('snd-fill').style.width = '0%';
+    $('snd-level').textContent = 'Motion: – m/s²';
+    if (msg !== undefined) sndStatus(msg || 'Stopped.', kind);
+    sndUi();
   }
 
   // ---- lifecycle -----------------------------------------------------------
@@ -1745,6 +2280,7 @@
       updateArming();
       refreshCameras();
       if (S.prefs.input === 'bt') btConnect(false);
+      if (S.prefs.input === 'phone') phoneConnect();
       if (navigator.mediaDevices.addEventListener) {
         navigator.mediaDevices.addEventListener('devicechange', onDeviceChange);
       }
@@ -1779,6 +2315,7 @@
     S.timers = [];
     S.calib = null;
     btDisconnect();
+    phoneDisconnect();
     S.panelOpen = false;
     S.micStarting = false;
     show('panel', false);
@@ -1820,6 +2357,13 @@
     setupGestures();
 
     $('btn-start').addEventListener('click', startApp);
+    $('btn-start-phone').addEventListener('click', () => {
+      if (S.running || S.starting) return;
+      S.prefs.input = 'phone';
+      savePrefs();
+      refreshSettingsUi();
+      startApp();
+    });
     $('btn-exit-live').addEventListener('click', exitApp);
     $('btn-exit-play').addEventListener('click', exitApp);
     $('btn-settings').addEventListener('click', openPanel);
@@ -1861,6 +2405,77 @@
       btConnect(true);
     });
     $('btn-bt-hud').addEventListener('click', () => btConnect(true));
+    $('in-phone').addEventListener('click', () => setInput('phone'));
+    $('in-ai').addEventListener('click', () => setInput('ai'));
+
+    // pose estimation / AI_trig
+    $('pose-on').addEventListener('change', (e) => { S.prefs.poseOn = !!e.target.checked; savePrefs(); applyPose(); refreshSettingsUi(); log('pose overlay', S.prefs.poseOn ? 'on' : 'off'); });
+    ['wrist', 'elbow', 'both'].forEach((m) => $('ai-m-' + m).addEventListener('click', () => { S.prefs.aiMode = m; savePrefs(); applyPoseConfig(); refreshSettingsUi(); log('AI release from', m); }));
+    $('ai-thr').addEventListener('input', (e) => { S.prefs.aiThr = Core.clamp(Math.round((parseFloat(e.target.value) || 2) * 10) / 10, 0.5, 6); savePrefs(); applyPoseConfig(); refreshSettingsUi(); });
+    $('pose-log-on').addEventListener('change', (e) => { S.prefs.poseLog = !!e.target.checked; savePrefs(); refreshSettingsUi(); log('pose log', S.prefs.poseLog ? 'on' : 'off'); });
+    $('btn-pose-clear').addEventListener('click', () => { Pose.clearLog(); refreshSettingsUi(); });
+    $('btn-pose-dl').addEventListener('click', () => {
+      try {
+        const blob = new Blob([Pose.exportLog()], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'pose_log_' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '.json';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+        toast('Pose log downloaded (' + Pose.logInfo() + ')', 'ok', 2500);
+      } catch (err) { toast('Download failed: ' + (err && err.message), 'err', 3000); }
+    });
+    // a detected release acts like a mic / BT / PHONE signal (same lockout, Sync offset, AUTO MODE rules)
+    if (Pose) Pose.onEvent((ev) => {
+      log('AI pose event', ev.type);
+      if (ev.type === 'release' && S.prefs.input === 'ai') onRemoteSignal('ai', S.ai);
+    });
+    $('ph-room').addEventListener('change', commitRoom);
+    $('ph-room').addEventListener('blur', commitRoom);
+    $('ph-url').addEventListener('change', commitMqttUrl);
+    $('ph-url').addEventListener('blur', commitMqttUrl);
+    $('btn-ph-url-reset').addEventListener('click', () => { $('ph-url').value = Phone.DEFAULT_URL; commitMqttUrl(); toast('Default server restored', 'ok', 1800); });
+    $('btn-ph-copy').addEventListener('click', copyRoom);
+    $('ph-sthr').addEventListener('input', (e) => { $('ph-sthr-text').textContent = (Math.round(parseFloat(e.target.value) * 2) / 2).toFixed(1) + ' m/s²'; });
+    $('ph-sthr').addEventListener('change', (e) => setSensorThr(e.target.value, true));
+    $('btn-ph-sthr-reset').addEventListener('click', () => setSensorThr(MOTION_DEFAULT, true));
+    $('btn-ph-new').addEventListener('click', () => {
+      S.prefs.room = Phone.randomRoom();
+      savePrefs();
+      log('phone room', S.prefs.room, '(new)');
+      refreshSettingsUi();
+      updateTopbar();
+      phoneReconnect();
+      toast('New room code: ' + S.prefs.room + '\nEnter it on the MOTION SENDER phone.', null, 3500);
+    });
+    $('btn-ph-connect').addEventListener('click', () => {
+      if (S.prefs.input !== 'phone') setInput('phone');
+      else if (S.ph.want) phoneDisconnect();
+      else phoneReconnect();
+      updateStatus();
+    });
+
+    // MOTION SENDER screen
+    $('btn-sender').addEventListener('click', openSender);
+    $('btn-snd-back').addEventListener('click', closeSender);
+    $('btn-snd-start').addEventListener('click', startSender);
+    $('btn-snd-stop').addEventListener('click', () => stopSender('Stopped.'));
+    $('btn-snd-test').addEventListener('click', () => sndSend(S.prefs.motionThr, true));
+    $('btn-snd-hide').addEventListener('click', () => sndLock(true));
+    $('btn-snd-url-reset').addEventListener('click', () => {
+      $('snd-url').value = S.prefs.mqttUrl = Phone.DEFAULT_URL;
+      savePrefs();
+      sndStatus('Default server restored.', 'ok');
+    });
+    setupSenderLock();
+    $('snd-room').addEventListener('input', () => { const v = Phone.cleanRoom($('snd-room').value); if (v !== $('snd-room').value) $('snd-room').value = v; });
+    $('snd-thr').addEventListener('input', (e) => {
+      S.prefs.motionThr = Core.clamp(Math.round((parseFloat(e.target.value) || MOTION_DEFAULT) * 2) / 2, MOTION_MIN, MOTION_MAX);
+      if (S.snd.det) S.snd.det.threshold = S.prefs.motionThr;
+      savePrefs();
+      sndUi();
+    });
+    $('snd-thr').addEventListener('change', sndShareThr);
 
     // microphone
     $('thr-slider').addEventListener('input', (e) => applyThreshold(Core.fromDb(parseFloat(e.target.value)), true));
@@ -1903,33 +2518,6 @@
       log('auto mode', S.prefs.auto ? 'on' : 'off');
     });
 
-    // pose estimation
-    $('pose-on').addEventListener('change', (e) => {
-      S.prefs.poseOn = !!e.target.checked;
-      savePrefs();
-      applyPose();
-      log('pose estimation', S.prefs.poseOn ? 'on' : 'off');
-    });
-
-    $('pose-log-on').addEventListener('change', (e) => {
-      S.prefs.poseLog = !!e.target.checked;
-      savePrefs(); refreshSettingsUi();
-      log('pose log', S.prefs.poseLog ? 'on' : 'off');
-    });
-    $('btn-pose-clear').addEventListener('click', () => { Pose.clearLog(); refreshSettingsUi(); });
-    $('btn-pose-dl').addEventListener('click', () => {
-      try {
-        const blob = new Blob([Pose.exportLog()], { type: 'application/json' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = 'pose_log_' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '.json';
-        document.body.appendChild(a); a.click(); a.remove();
-        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-        toast('Pose log downloaded (' + Pose.logInfo() + ')', 'ok', 2500);
-      } catch (err) { toast('Download failed: ' + (err && err.message), 'err', 3000); }
-    });
-    if (Pose) Pose.onEvent((ev) => log('AI pose event', ev.type));
-
     // screen orientation
     $('ori-landscape').addEventListener('click', () => setOrientation('landscape'));
     $('ori-portrait').addEventListener('click', () => setOrientation('portrait'));
@@ -1960,6 +2548,7 @@
 
     // Lifecycle: browsers stop camera/mic when the page is hidden, so shut down cleanly.
     document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && S.snd.active) sndAcquireWake(); // the wake lock is dropped while hidden
       if (document.visibilityState === 'hidden' && S.running && !S.sharing) {
         log('page hidden -> stopping');
         stopAll('Paused because the app went to the background.\nPress START to continue.');
@@ -1972,7 +2561,7 @@
       navigator.serviceWorker.register('sw.js').catch((e) => log('sw register failed', e && e.message));
     }
     setMode('idle');
-    log('DD Archery Looper v5 ready. secure=' + window.isSecureContext + ' ios=' + isIOS +
+    log('DD Archery Looper v6 ready. secure=' + window.isSecureContext + ' ios=' + isIOS +
       ' webcodecs=' + ('VideoEncoder' in window) + ' trackProcessor=' + ('MediaStreamTrackProcessor' in window));
   }
 

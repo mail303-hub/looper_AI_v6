@@ -1,5 +1,5 @@
 /* Offline cache: after the first load the whole app works without internet. */
-const CACHE = 'dd-archery-looper-v5.2.0';
+const CACHE = 'dd-archery-looper-v6.3.0';
 const FILES = [
   './',
   './index.html',
@@ -7,6 +7,7 @@ const FILES = [
   './app.js',
   './core.js',
   './mp4.js',
+  './phone.js',
   './pose.js',
   './audio-worklet.js',
   './manifest.webmanifest',
@@ -28,13 +29,16 @@ self.addEventListener('activate', (e) => {
   );
 });
 
+// Network first, so a new version shows up on the next start; the cache is only the offline fallback.
 self.addEventListener('fetch', (e) => {
   const req = e.request;
-  if (req.method !== 'GET') return;
+  if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
   e.respondWith(
-    caches.match(req, { ignoreSearch: true }).then((hit) => {
-      if (hit) return hit;
-      return fetch(req).catch(() => caches.match('./index.html'));
-    })
+    fetch(req)
+      .then((res) => {
+        if (res && res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {}); }
+        return res;
+      })
+      .catch(() => caches.match(req, { ignoreSearch: true }).then((hit) => hit || caches.match('./index.html')))
   );
 });

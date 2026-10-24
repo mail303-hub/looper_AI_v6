@@ -1,11 +1,15 @@
-# DD Archery Looper v5.1 (PWA)
+# DD Archery Looper v6.0 (PWA)
+
+**Jaunums v6:** trešais trigera režīms **PHONE**: otrs telefons kalpo kā kustības sensors (**MOTION SENDER**) un pa internetu nosūta trigeri looper telefonam. Sk. sadaļu [PHONE trigeris](#phone-trigeris-v6).
 
 Šaušanas treniņa "tūlītējais atkārtojums": telefons stāv pie mērķa, kamera un mikrofons strādā nepārtraukti.
 Kad mikrofons dzird asu skaņu (bultas trāpījums, loka klikšķis, plaukšķis) **vai pienāk BLE signāls no ārējās ierīces**, lietotne uztaisa **īsu video** (noklusējumā 2 s:
 1 s pirms skaņas + 1 s pēc skaņas; garums un attiecība regulējama), pati to atskaņo ciklā, un jūs izvēlaties **SAVE** vai **NEXT**.
 
+(v6: **vai pienāk MOT no otra telefona** režīmā PHONE.)
+
 Darbojas kā parasta tīmekļa lapa / PWA: **Android (Chrome)**, **iPhone/iPad (Safari, iOS 16.4+)** un **dators (Chrome/Edge)**.
-Pēc pirmās ielādes darbojas **bez interneta**. Nav konta, reklāmu, analītikas, nekas netiek sūtīts uz tīklu.
+Pēc pirmās ielādes darbojas **bez interneta**. Nav konta, reklāmu, analītikas, nekas netiek sūtīts uz tīklu (izņemot PHONE režīmu: tur caur publisku MQTT serveri tiek sūtīts tikai īss "MOT" ziņojums, nekad video vai skaņa).
 
 ---
 
@@ -34,6 +38,15 @@ Pēc tam telefonā atverat adresi un pievienojat sākuma ekrānam.
 
 (Telefonā, izmantojot datora IP adresi, tas **nestrādās**, jo tā nav https.)
 
+### C variants: pārbaude telefonā no sava datora (https tunelis)
+
+Kamerai, mikrofonam un kustības sensoram vajag https. Bez hostinga to var iegūt ar bezmaksas Cloudflare tuneli:
+
+1. Mapē `dd-archery-looper_60`: `python -m http.server 8000`
+2. Otrā terminālī: `cloudflared tunnel --url http://localhost:8000` (cloudflared lejupielāde: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/ ; nav vajadzīgs konts).
+3. Terminālī parādīsies adrese `https://kaut-kas.trycloudflare.com`: to atveriet abos telefonos.
+4. Tunelis darbojas, kamēr abi termināļi ir atvērti; katru reizi adrese ir cita.
+
 ### Pievienot sākuma ekrānam ("instalēt")
 
 | Ierīce | Kā |
@@ -46,7 +59,7 @@ Pēc tam telefonā atverat adresi un pievienojat sākuma ekrānam.
 Pārlūks jautās atļauju **kamerai** un **mikrofonam**: jāatļauj abas.
 (iPhone Home Screen lietotnē atļauju jautājums var atkārtoties katrā palaišanā. Tā ir iOS īpatnība.)
 
-Atjaunojot failus hostingā, `sw.js` failā nomainiet `CACHE` nosaukumu (piem. `v2.0.1`), lai telefons ielādētu jauno versiju.
+v6: lietotne vienmēr vispirms ielādē jaunāko versiju no interneta (kešs tiek izmantots tikai bezsaistē), tāpēc pēc atjaunošanas pietiek ar lapas pārlādi. Versija redzama iestatījumu apakšā un MOTION SENDER ekrānā.
 
 ---
 
@@ -87,6 +100,29 @@ Atjaunojot failus hostingā, `sw.js` failā nomainiet `CACHE` nosaukumu (piem. `
 
 ---
 
+## PHONE trigeris (v6)
+
+Vajag divus telefonus ar internetu (Wi-Fi vai mobilie dati, var būt dažādos tīklos).
+
+**Looper telefons** (tas, kas filmē):
+1. Sākuma ekrānā **START LOOPER (PHONE TRIGGER)** (vai ⚙ → Trigger input → **PHONE**).
+2. Augšā vidū redzams **PHONE ROOM XXXXXXXX**: tas ir šī telefona **ROOM CODE** (8 burti/cipari, izveidots vienreiz un paliek tas pats). Zaļš PHONE = savienots, sarkans **PHONE ✕** = nav savienojuma (lietotne pati mēģina atkal ik pēc 2,5…15 s; statuss **PHONE CONNECTING / RECONNECTING**).
+3. ⚙ → **Phone trigger**: ROOM CODE (var ievadīt savu, vismaz 6 simboli), **Copy code**, **New code** (jauns nejaušs kods), serveris zem **Server settings** (paslēpts, atver ar pieskārienu; noklusējums `wss://broker.emqx.io:8084/mqtt`, poga **Restore default server** to atjauno), **Sensor threshold** (sensora telefona jutība 5–100 m/s², poga **Restore default threshold (15)**; to var mainīt gan looperī, gan sensora telefonā; abi paliek vienādi, uzvar pēdējā izmaiņa), **Connect / Disconnect** un statuss (arī pēdējā saņemtā MOT laiks un stiprums).
+4. PHONE režīmā mikrofons ir izslēgts (kā BT režīmā). Atpakaļ uz **MIC** var pārslēgties bez restarta.
+
+**Sensora telefons** (piestiprināts pie loka, rokas u.tml.):
+1. Atver to pašu adresi, sākuma ekrānā **MOTION SENDER** (kamera netiek ieslēgta).
+2. Ievada looper telefona ROOM CODE, iestata **Threshold** (5–100 m/s², noklusējums **15 m/s²**; pa kreisi = jutīgāk). Slieksnis ir kopīgs ar looper **Sensor threshold**: izmaiņa vienā ierīcē parādās otrā, uzvar pēdējā (serveris glabā pēdējo vērtību, tēma `ddarchery/v1/<ROOM>/config`; izmaiņa bez savienojuma netiek nosūtīta). **Last peak** rāda lielāko kustības stiprumu 1 s laikā pēc pēdējā trigera, lai var izvēlēties slieksni. Šo vērtību redz arī looper ierīcē: augšējā joslā (`ROOM … · peak 63.0`) un ⚙ → Phone trigger statusā.
+3. **CONNECT & START SENSOR**. iPhone jautās atļauju kustības sensoram (jāatļauj). Ekrāns netiek izslēgts (Wake Lock), lietotnei jāpaliek priekšplānā.
+4. Kad sensors sāk darboties, ekrāns **nobloķējas**: tas kļūst melns, nereaģē uz pieskārieniem (telefonu var turēt rokā vai kabatā), lapa pāriet **pilnekrāna režīmā** (pazūd pārlūka joslas un, kur sistēma atļauj, arī navigācijas pogas; orientācija tiek nofiksēta), redzams tikai punkts (zaļš = savienots, sarkans = nav savienojuma, balts uzplaiksnījums = MOT nosūtīts) un mazs **zobrats ⚙** labajā augšējā stūrī. Iestatījumi atveras tikai, ja zobratu **tur nospiestu ~1 s** (īss pieskāriens parāda tikai padomu). Atvērtajos iestatījumos ir **Hide** (atpakaļ uz bloķēto ekrānu), **Stop**, **Back**; ja 20 s nekas netiek aiztikts, ekrāns nobloķējas pats. Ja pilnekrāns tiek pamests (piem. ar sistēmas "atpakaļ" žestu), pietiek pieskarties melnajam ekrānam, un tas atjaunojas. **iPhone Safari pilnekrānu tīmekļa lapām neatbalsta**: tur pievienojiet lietotni sākuma ekrānam (Kopīgot → Pievienot sākuma ekrānam) un palaidiet no turienes, tad pārlūka joslu nav.
+5. Atvērtajos iestatījumos josla rāda kustības stiprumu (sarkanā svītra = slieksnis). Kad paātrinājums (bez gravitācijas) pārsniedz slieksni, tiek nosūtīts **MOT** (ne biežāk kā reizi sekundē; nākamais tikai pēc tam, kad kustība norimst). **Send test** nosūta MOT ar roku (noder pārbaudei, arī no datora).
+
+Looper telefonā MOT darbojas tieši tāpat kā mikrofona vai BT signāls (1,5 s bloķēšana, AUTO MODE, Sync offset). Interneta aizture parasti ir 0,1–0,4 s: ja šāviens klipā ir par vēlu, iestatiet **Sync offset** negatīvu (piem. −150…−300 ms).
+
+Tehniski: MQTT 3.1.1 caur drošu WebSocket (paša rakstīts klients `phone.js`, bez bibliotēkām), tēma `ddarchery/v1/<ROOM>/trigger`, ziņojums `{"type":"MOT","a":4.2,"ts":...}`. Der arī vienkāršs teksts, kas satur `MOT` (piem. no mikrokontroliera). Serveris ir publisks: ikviens, kas zina ROOM CODE, var nosūtīt trigeri, tāpēc kodu nestāstiet citiem (vai nospiediet New code).
+
+---
+
 ## 3. Kā tas strādā (īsi)
 
 - Kamera → kadri → **WebCodecs H.264 kodētājs** → **riņķa buferis atmiņā** (klipa garums + 1,5 s kodētu kadru; pie 2 s tas ir ~2–3 MB, pie 5 s ~5 MB). Uz diska netiek rakstīts nekas, tāpēc nav iespējams, ka krātuve aug.
@@ -95,7 +131,7 @@ Atjaunojot failus hostingā, `sw.js` failā nomainiet `CACHE` nosaukumu (piem. `
 - Pēc trigera lietotne **gaida, līdz ierakstīta vēl 1 s**, un tikai tad saliek MP4 (paša rakstīts MP4 sapakotājs `mp4.js`, nav ārējo bibliotēku) un sāk atskaņošanu.
 - Rezultāts (noklusējumā): 2,000 s, parasti 60 kadri pie 30 FPS, trigers klipa vidū. Ar citu garumu/attiecību tas pats princips.
 
-Faili: `index.html`, `style.css`, `app.js` (loģika), `core.js` (sliekšņa matemātika, klipa izvēle), `mp4.js` (MP4 sapakotājs), `audio-worklet.js` (detektors), `sw.js` (bezsaistes kešs), `manifest.webmanifest`, `icons/`.
+Faili: `index.html`, `style.css`, `app.js` (loģika), `core.js` (sliekšņa matemātika, klipa izvēle), `mp4.js` (MP4 sapakotājs), `phone.js` (PHONE trigeris: MQTT klients, ROOM kods, kustības detektors), `audio-worklet.js` (detektors), `sw.js` (bezsaistes kešs), `manifest.webmanifest`, `icons/`.
 
 ---
 
@@ -147,6 +183,14 @@ Faili: `index.html`, `style.css`, `app.js` (loģika), `core.js` (sliekšņa mate
 | 42 | Filming speed 60 fps | Kamera pārslēdzas, klipā ~120 kadru; ja nav atbalsta, paziņojums |
 | 44 | PC: peles rullītis atskaņošanas logā (Playback zoom ieslēgts) | Tuvina ap kursoru, Shift+vilkšana pārvieto, Reset zoom atceļ |
 | 43 | Debug | Žurnāls aizņem visu logu; Copy log nokopē tekstu |
+| 45 | START LOOPER (PHONE TRIGGER) | Augšā "PHONE ROOM XXXXXXXX", pēc brīža zaļš PHONE un ● LISTENING |
+| 46 | Otrā telefonā MOTION SENDER, ievadīt kodu, CONNECT & START SENSOR | "Connected, room …"; kustinot josla kustas |
+| 47 | Asi pakustināt sensora telefonu | Sensora telefonā "MOT sent"; looper telefonā ● REC un atskaņošana |
+| 47a | Sensora ekrānā pieskarties jebkur (arī tur, kur bija Stop/Back) | Nekas nenotiek, sensors strādā; īss pieskāriens ⚙ = padoms, turēt ⚙ ~1 s = iestatījumi |
+| 48 | Send test divreiz ātri pēc kārtas | Looper telefonā tikai viens trigers |
+| 49 | Izslēgt internetu looper telefonam un ieslēgt atpakaļ | PHONE ✕ / PHONE RECONNECTING, pēc tam savienojas pats |
+| 50 | ⚙ → New code | Jauns kods augšā; sensora telefonā jāievada jaunais kods |
+| 51 | PHONE → MIC → PHONE iestatījumos | Mikrofons ieslēdzas bez restarta, atpakaļ PHONE savienojas no jauna |
 
 ---
 
@@ -173,6 +217,8 @@ Faili: `index.html`, `style.css`, `app.js` (loģika), `core.js` (sliekšņa mate
 - BT ziņojuma formāts un servisa UUID man nav zināms: lietotne pieņem jebkuru tekstu, kas satur "MOT" (reģistrs nav svarīgs), un abonē visus notify raksturlielumus norādītajā servisā. Ja ierīcē nav neviena no norādītajiem servisiem, parādās kļūdas ziņojums (un Debug žurnālā redzams, kuri UUID netika atrasti).
 - **SAVE ar zoom/režģi** pārkodē video (WebCodecs), tāpēc kvalitāte ir ļoti tuva, bet ne identiska oriģinālam. Uz iPhone kopīgošanas lapa pēc pārkodēšanas dažkārt netiek atvērta (pārlūks pieprasa tūlītēju pieskārienu); tad fails tiek lejupielādēts.
 - **AUTO MODE**: ja šāvieni seko ļoti cits citam (ātrāk nekā klipa "pēc" daļa + 1,5 s bloķēšana), daži netiks uztverti.
+
+- **PHONE**: abiem telefoniem vajag internetu un publiskā MQTT servera pieejamību (daži uzņēmumu/skolu Wi-Fi bloķē portu 8084; tad lietojiet mobilos datus vai citu `wss://` serveri). Aizture atkarīga no tīkla (parasti 0,1–0,4 s, var svārstīties), tāpēc precizitāte ir mazāka nekā MIC/BT. Sensora telefonam jābūt priekšplānā ar ieslēgtu ekrānu.
 
 ## 6. Nākamā versija (ja vajag)
 

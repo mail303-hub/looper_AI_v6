@@ -11,11 +11,11 @@
   // MediaPipe landmark indexes: 11/12 shoulders, 13/14 elbows, 15/16 wrists, 23/24 hips
   const POINTS = [11, 12, 13, 14, 15, 16, 23, 24];
   const LINES = [[11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [11, 23], [12, 24], [23, 24]];
-  const INTERVAL_MS = 66;   // about 15 detections per second, enough for an overlay and cheap on phones
 
   let landmarker = null, loading = null, failed = false;
   let video = null, canvas = null, onStatus = null;
   let running = false, timer = 0, lastVideoTime = -1, token = 0;
+  let overlay = true, lastErr = '';
   let lastResult = null;    // latest landmarks (normalised), for the future AI_trig logic
 
   function status(t) { try { if (onStatus) onStatus(t); } catch (e) { /* ignore */ } }
@@ -98,9 +98,12 @@
     steadySpeed: 0.8,   // shoulder widths / s, below = steady
     releaseSpeed: 2.0,  // draw wrist moving away from the face faster than this = RELEASE
     cooldownMs: 1500,
-    lostMs: 600         // anchor lost without a fast move for this long = let-down (no release)
+    lostMs: 600,        // anchor lost without a fast move for this long = let-down (no release)
+    mode: 'wrist',      // release signal: 'wrist' | 'elbow' | 'both'
+    elbowSpeed: 1.5,    // drawing elbow moving faster than this (shoulder widths / s, any direction) = release
+    interval: 66        // ms between detections (about 15 / s); AI_trig uses 33 for the short release movement
   };
-  const det = { state: 'IDLE', since: 0, prevD: null, prevT: 0, vS: 0, side: null, flashUntil: 0, flashType: '', lostSince: 0 };
+  const det = { state: 'IDLE', since: 0, prevD: null, prevT: 0, vS: 0, prevE: null, eV: 0, side: null, flashUntil: 0, flashType: '', lostSince: 0 };
   let onEvent = null;
 
   const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -121,7 +124,7 @@
     const vis = (i) => lm[i] && (lm[i].visibility === undefined || lm[i].visibility > 0.4);
     if (![0, 9, 10, 11, 12, 13, 14, 15, 16].every(vis)) {
       if (det.state !== 'IDLE' && t - det.since > CFG.lostMs) setState('IDLE', t);
-      det.prevD = null; return;
+      det.prevD = null; det.prevE = null; return;
     }
     const sw = dist(lm[11], lm[12]);
     if (sw < 0.03) return;
@@ -134,6 +137,15 @@
     let v = 0;
     if (det.prevD !== null && t > det.prevT) v = (d - det.prevD) / ((t - det.prevT) / 1000);
     det.vS = det.vS * 0.5 + v * 0.5;  // light smoothing; positive = hand moves away from the face
+    // drawing elbow speed (shoulder widths / s, any direction)
+    const eI = side === 'L' ? 13 : 14;
+    if (vis(eI)) {
+      const ex = lm[eI].x, ey = lm[eI].y;
+      let ev = 0;
+      if (det.prevE && t > det.prevT) ev = Math.hypot(ex - det.prevE.x, ey - det.prevE.y) / sw / ((t - det.prevT) / 1000);
+      det.eV = det.eV * 0.5 + ev * 0.5;
+      det.prevE = { x: ex, y: ey };
+    } else { det.prevE = null; det.eV = 0; }
     det.prevD = d; det.prevT = t;
     const straight = bowAng >= CFG.bowAngle;
 
@@ -148,13 +160,19 @@
         } else det.since = t; // not anchored/steady yet: restart the hold timer
         break;
       case 'FULL_DRAW':
-        if (det.vS > CFG.releaseSpeed && d > CFG.anchorDist * 0.8) { emit('release', t); setState('IDLE', t); det.side = null; }
+        if (releaseNow(d)) { emit('release', t); setState('IDLE', t); det.side = null; }
         else if (d > CFG.anchorDist + 0.15 || !straight) {
           if (!det.lostSince) det.lostSince = t;
           if (t - det.lostSince > CFG.lostMs) { setState('IDLE', t); det.side = null; } // let-down
         } else det.lostSince = 0;
         break;
     }
+  }
+
+  function releaseNow(d) {
+    const wristFast = det.vS > CFG.releaseSpeed && d > CFG.anchorDist * 0.8;
+    const elbowFast = det.eV > CFG.elbowSpeed;
+    return CFG.mode === 'elbow' ? elbowFast : CFG.mode === 'both' ? (wristFast && elbowFast) : wristFast;
   }
 
   function drawState(g) {
@@ -199,14 +217,14 @@
         lastVideoTime = video.currentTime;
         const res = landmarker.detectForVideo(video, performance.now());
         lastResult = res && res.landmarks && res.landmarks[0] ? res.landmarks[0] : null;
-        draw(lastResult);
+        if (overlay) draw(lastResult);
         const now = performance.now();
         if (lastResult) detect(lastResult, now);
         logFrame(lastResult, now);
-        { const g = canvas.getContext('2d'); g.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0); drawState(g); }
+        if (overlay) { const g = canvas.getContext('2d'); g.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0); drawState(g); }
       }
     } catch (e) { status('Pose error: ' + (e && e.message)); }
-    timer = setTimeout(() => tick(my), INTERVAL_MS);
+    timer = setTimeout(() => tick(my), CFG.interval);
   }
 
   async function start(videoEl, canvasEl, statusCb) {
@@ -214,7 +232,8 @@
     if (running) return;
     running = true;
     const my = ++token;
-    canvas.classList.remove('hidden');
+    if (overlay) canvas.classList.remove('hidden');
+    lastErr = '';
     try {
       await load();
       if (!running || my !== token) return;
@@ -223,7 +242,8 @@
     } catch (e) {
       running = false;
       canvas.classList.add('hidden');
-      status('Pose model could not be loaded (internet needed the first time): ' + (e && e.message));
+      lastErr = (e && e.message) || 'error';
+      status('Pose model could not be loaded (internet needed the first time): ' + lastErr);
     }
   }
 
@@ -231,7 +251,7 @@
     running = false; token++;
     clearTimeout(timer); timer = 0;
     lastVideoTime = -1; lastResult = null;
-    det.state = 'IDLE'; det.side = null; det.prevD = null; det.vS = 0;
+    det.state = 'IDLE'; det.side = null; det.prevD = null; det.prevE = null; det.vS = 0; det.eV = 0;
     clear();
     if (canvas) canvas.classList.add('hidden');
     status('Pose estimation off');
@@ -239,7 +259,9 @@
 
   self.DDPose = {
     start, stop, isRunning: () => running, last: () => lastResult,
-    onEvent: (fn) => { onEvent = fn; }, config: CFG, state: () => det.state,
+    onEvent: (fn) => { onEvent = fn; },
+    ready: () => !!landmarker, error: () => lastErr,
+    setOverlay: (on) => { overlay = !!on; if (canvas) { if (!overlay) { clear(); canvas.classList.add('hidden'); } else if (running) canvas.classList.remove('hidden'); } }, config: CFG, state: () => det.state,
     setLogging, clearLog, mark, exportLog, logInfo,
     feed: (lm, t) => detect(lm, t)   // replay a recorded log / unit tests
   };
