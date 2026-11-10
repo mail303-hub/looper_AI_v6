@@ -16,6 +16,24 @@
   let running = false, timer = 0, lastVideoTime = -1, token = 0;
   let overlay = true, lastErr = '';
   let lastResult = null;    // latest landmarks (normalised), for the future AI_trig logic
+  let smoothLm = null;      // EMA-smoothed landmarks, so drawn/detected points hold steady on the joint instead of jittering frame to frame
+
+  // blend the model's raw per-frame landmarks into a running average (x/y only) so points settle on the
+  // joint instead of jumping around; visibility is kept raw so a lost joint still disappears right away
+  const SMOOTH_ALPHA = 0.45;   // share of the new sample per frame: lower = steadier but slower to follow real movement
+  function smoothed(raw) {
+    if (!raw) { smoothLm = null; return null; }
+    if (!smoothLm || smoothLm.length !== raw.length) { smoothLm = raw.map((p) => ({ x: p.x, y: p.y, z: p.z, visibility: p.visibility })); return smoothLm; }
+    for (let i = 0; i < raw.length; i++) {
+      const s = smoothLm[i], p = raw[i];
+      if (!s || !p) continue;
+      s.x += (p.x - s.x) * SMOOTH_ALPHA;
+      s.y += (p.y - s.y) * SMOOTH_ALPHA;
+      s.z = p.z;
+      s.visibility = p.visibility;
+    }
+    return smoothLm;
+  }
 
   function status(t) { try { if (onStatus) onStatus(t); } catch (e) { /* ignore */ } }
 
@@ -282,7 +300,8 @@
       if (landmarker && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
         lastVideoTime = video.currentTime;
         const res = landmarker.detectForVideo(video, performance.now());
-        lastResult = res && res.landmarks && res.landmarks[0] ? res.landmarks[0] : null;
+        const raw = res && res.landmarks && res.landmarks[0] ? res.landmarks[0] : null;
+        lastResult = smoothed(raw);
         if (overlay) draw(lastResult);
         const now = performance.now();
         if (lastResult) detect(lastResult, now);
@@ -316,7 +335,7 @@
   function stop() {
     running = false; token++;
     clearTimeout(timer); timer = 0;
-    lastVideoTime = -1; lastResult = null;
+    lastVideoTime = -1; lastResult = null; smoothLm = null;
     det.state = 'IDLE'; det.side = null; det.prevD = null; det.vS = 0;
     clear();
     if (canvas) canvas.classList.add('hidden');
