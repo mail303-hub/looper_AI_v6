@@ -146,11 +146,12 @@
           <div>Angle check (line turns red)</div>
           <div class="seg"><button id="pa-le" class="btn small" type="button">L elbow</button><button id="pa-re" class="btn small" type="button">R elbow</button></div>
           <div class="seg"><button id="pa-ls" class="btn small" type="button">L shoulder</button><button id="pa-rs" class="btn small" type="button">R shoulder</button></div>
+          <div class="seg"><button id="pa-lw" class="btn small" type="button">L wrist</button><button id="pa-rw" class="btn small" type="button">R wrist</button></div>
           <div class="row"><span>Target angle</span><span id="pa-target-text">180°</span></div>
           <input id="pa-target" type="range" min="60" max="180" step="5" value="180" aria-label="Target angle">
           <div class="row"><span>Allowed deviation (x)</span><span id="pa-tol-text">5°</span></div>
           <input id="pa-tol" type="range" min="0" max="15" step="1" value="5" aria-label="Allowed deviation">
-          <div class="hint">Elbow angle = shoulder-elbow-wrist; shoulder angle = other shoulder-shoulder-elbow. 180° = straight. When the angle differs from the target by more than x°, the lines at that joint turn red.</div>
+          <div class="hint">Elbow angle = shoulder-elbow-wrist; shoulder angle = other shoulder-shoulder-elbow; wrist angle = elbow-wrist-index (hand bend). 180° = straight. When the angle differs from the target by more than x°, the lines at that joint turn red.</div>
           <div class="row"><span>Release speed</span><span id="ai-thr-text">2.0</span></div>
           <input id="ai-thr" type="range" min="0.5" max="4" step="0.1" value="2" aria-label="AI release speed threshold">
           <div class="row dim"><span>more sensitive</span><span>less sensitive</span></div>

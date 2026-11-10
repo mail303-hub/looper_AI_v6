@@ -76,7 +76,7 @@
     offsetMs: 0,
     prefs: { buf: 2, split: 0.5, cam: null, zoomOn: false, gridOn: false, gridSize: 100, gridInt: 5, gridColor: 'white', auto: false, orient: 'landscape', input: 'mic', slomoFps: SLOMO_DEFAULT, btName: BT_DEFAULT_NAME, fps: FPS_DEFAULT,
       room: '', mqttUrl: Phone.DEFAULT_URL, sndRoom: '', motionThr: MOTION_DEFAULT, sensorThr: MOTION_DEFAULT,
-      poseOn: false, poseLog: false, aiThr: 2.0, aiHand: 'right', poseAngOn: { ls: false, rs: false, le: false, re: false }, poseAngTarget: 180, poseAngTol: 5, poseShow: { rs: true, ls: true, re: true, le: true, rw: true, lw: true, mouth: true },
+      poseOn: false, poseLog: false, aiThr: 2.0, aiHand: 'right', poseAngOn: { ls: false, rs: false, le: false, re: false, lw: false, rw: false }, poseAngTarget: 180, poseAngTol: 5, poseShow: { rs: true, ls: true, re: true, le: true, rw: true, lw: true, mouth: true },
       motThr: 12, motAng: 35, motSpd: 2, motR: 0.12, motCx: null, motCy: null },   // MOT: change threshold (% in ~50 ms), circle size / centre (share of the camera picture)
     mot: { lastSig: 0 },  // MOT (motion circle) signal lockout
     motPlacing: false,
@@ -394,7 +394,7 @@
         d.poseLog = !!p.poseLog;
         if (isFinite(p.aiThr)) d.aiThr = Core.clamp(Math.round(p.aiThr * 10) / 10, 0.5, 4);
         d.aiHand = p.aiHand === 'left' ? 'left' : 'right';
-        if (p.poseAngOn && typeof p.poseAngOn === 'object') ['ls', 'rs', 'le', 're'].forEach((k) => { if (typeof p.poseAngOn[k] === 'boolean') d.poseAngOn[k] = p.poseAngOn[k]; });
+        if (p.poseAngOn && typeof p.poseAngOn === 'object') ['ls', 'rs', 'le', 're', 'lw', 'rw'].forEach((k) => { if (typeof p.poseAngOn[k] === 'boolean') d.poseAngOn[k] = p.poseAngOn[k]; });
         if (isFinite(p.poseAngTarget)) d.poseAngTarget = Core.clamp(Math.round(p.poseAngTarget / 5) * 5, 60, 180);
         if (isFinite(p.poseAngTol)) d.poseAngTol = Core.clamp(Math.round(p.poseAngTol), 0, 15);
         if (p.poseShow && typeof p.poseShow === 'object') ['rs', 'ls', 're', 'le', 'rw', 'lw', 'mouth'].forEach((k) => { if (typeof p.poseShow[k] === 'boolean') d.poseShow[k] = p.poseShow[k]; });
@@ -472,7 +472,7 @@
     $('pose-on').checked = p.poseOn;
     $('pose-log-on').checked = p.poseLog;
     ['right', 'left'].forEach((m) => $('ai-h-' + m).classList.toggle('sel', p.aiHand === m));
-    ['ls', 'rs', 'le', 're'].forEach((k) => $('pa-' + k).classList.toggle('sel', !!p.poseAngOn[k]));
+    ['ls', 'rs', 'le', 're', 'lw', 'rw'].forEach((k) => $('pa-' + k).classList.toggle('sel', !!p.poseAngOn[k]));
     $('pa-target').value = String(p.poseAngTarget); $('pa-target-text').textContent = p.poseAngTarget + '\u00B0';
     $('pa-tol').value = String(p.poseAngTol); $('pa-tol-text').textContent = p.poseAngTol + '\u00B0';
     ['ls', 'rs', 'le', 're', 'lw', 'rw', 'mouth'].forEach((k) => $('ps-' + k).classList.toggle('sel', !!p.poseShow[k]));
@@ -2629,7 +2629,7 @@
 
     // pose estimation / AI_trig
     ['ls', 'rs', 'le', 're', 'lw', 'rw', 'mouth'].forEach((k) => $('ps-' + k).addEventListener('click', () => { S.prefs.poseShow[k] = !S.prefs.poseShow[k]; savePrefs(); applyPoseConfig(); refreshSettingsUi(); }));
-    ['ls', 'rs', 'le', 're'].forEach((k) => $('pa-' + k).addEventListener('click', () => { S.prefs.poseAngOn[k] = !S.prefs.poseAngOn[k]; savePrefs(); applyPoseConfig(); refreshSettingsUi(); }));
+    ['ls', 'rs', 'le', 're', 'lw', 'rw'].forEach((k) => $('pa-' + k).addEventListener('click', () => { S.prefs.poseAngOn[k] = !S.prefs.poseAngOn[k]; savePrefs(); applyPoseConfig(); refreshSettingsUi(); }));
     $('pa-target').addEventListener('input', (e) => { S.prefs.poseAngTarget = Core.clamp(Math.round((parseFloat(e.target.value) || 180) / 5) * 5, 60, 180); savePrefs(); applyPoseConfig(); refreshSettingsUi(); });
     $('pa-tol').addEventListener('input', (e) => { S.prefs.poseAngTol = Core.clamp(Math.round(parseFloat(e.target.value)), 0, 15) || 0; savePrefs(); applyPoseConfig(); refreshSettingsUi(); });
     $('pose-on').addEventListener('change', (e) => { S.prefs.poseOn = !!e.target.checked; savePrefs(); applyPose(); refreshSettingsUi(); log('pose overlay', S.prefs.poseOn ? 'on' : 'off'); });

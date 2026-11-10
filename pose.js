@@ -75,9 +75,10 @@
     g.strokeStyle = 'rgba(63,185,80,0.95)';
     const SHOW = CFG.show || {};
     const shown = (i) => ({ 11: SHOW.ls, 12: SHOW.rs, 13: SHOW.le, 14: SHOW.re, 15: SHOW.lw, 16: SHOW.rw })[i] !== false;
-    // joint angle check (in screen pixels): elbow = shoulder-elbow-wrist, shoulder = other shoulder-shoulder-elbow; 180 = straight
-    const AJ = { le: [11, 13, 15], re: [12, 14, 16], ls: [12, 11, 13], rs: [11, 12, 14] };
-    const AL = { le: [[11, 13], [13, 15]], re: [[12, 14], [14, 16]], ls: [[11, 12], [11, 13]], rs: [[11, 12], [12, 14]] };
+    // joint angle check (in screen pixels): elbow = shoulder-elbow-wrist, shoulder = other shoulder-shoulder-elbow,
+    // wrist = elbow-wrist-index (hand bend); 180 = straight
+    const AJ = { le: [11, 13, 15], re: [12, 14, 16], ls: [12, 11, 13], rs: [11, 12, 14], lw: [13, 15, 19], rw: [14, 16, 20] };
+    const AL = { le: [[11, 13], [13, 15]], re: [[12, 14], [14, 16]], ls: [[11, 12], [11, 13]], rs: [[11, 12], [12, 14]], lw: [[13, 15]], rw: [[14, 16]] };
     const red = new Set(), angTxt = [];
     const AC = CFG.angle || {};
     Object.keys(AJ).forEach((k) => {
@@ -155,7 +156,7 @@
     cooldownMs: 1500,
     lostMs: 600,        // anchor lost without a fast move for this long = let-down (no release)
     show: { rs: true, ls: true, re: true, le: true, rw: true, lw: true, mouth: true },   // which points are drawn (r = person's right: landmarks 12/14/16, l = left: 11/13/15)
-    angle: { on: { ls: false, rs: false, le: false, re: false }, target: 180, tol: 5 },   // joint angle check: a line turns red when the angle differs from target by more than tol (degrees)
+    angle: { on: { ls: false, rs: false, le: false, re: false, lw: false, rw: false }, target: 180, tol: 5 },   // joint angle check: a line turns red when the angle differs from target by more than tol (degrees)
     hand: 'right',      // shooter's drawing hand: 'right' (draws with the right hand) or 'left'
     interval: 66        // ms between detections (about 15 / s); AI_trig uses 33 for the short release movement
   };
