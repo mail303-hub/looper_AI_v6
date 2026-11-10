@@ -38,6 +38,8 @@
   const LS_PREFS = 'dd_prefs';
   const LS_ZOOM = 'dd_zoom';
   const BT_DEFAULT_NAME = 'xiao_mg24_1';
+  // the points a custom angle can be built from: shoulders, elbows, wrists, hips, index fingers (the hand points past the wrist)
+  const ANGLE_POINTS = ['ls', 'rs', 'le', 're', 'lw', 'rw', 'lh', 'rh', 'li', 'ri'];
   const NUS_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';  // Nordic UART
   // services tried by default (comma separated list; the first ones found on the device are used)
   // first: the service of the Seeed XIAO MG24 / Silicon Labs Arduino BLE examples (notify characteristic 61a885a4-...)
@@ -77,6 +79,7 @@
     prefs: { buf: 2, split: 0.5, cam: null, zoomOn: false, gridOn: false, gridSize: 100, gridInt: 5, gridColor: 'white', auto: false, orient: 'landscape', input: 'mic', slomoFps: SLOMO_DEFAULT, btName: BT_DEFAULT_NAME, fps: FPS_DEFAULT,
       room: '', mqttUrl: Phone.DEFAULT_URL, sndRoom: '', motionThr: MOTION_DEFAULT, sensorThr: MOTION_DEFAULT,
       poseOn: false, poseLog: false, aiThr: 2.0, aiHand: 'right', poseAngOn: { ls: false, rs: false, le: false, re: false, lw: false, rw: false }, poseAngTarget: 180, poseAngTol: 5, poseShow: { rs: true, ls: true, re: true, le: true, rw: true, lw: true, mouth: true },
+      poseAngCustom: { on: false, p: ['re', 'rw', 'ri'], vertex: 1 },   // free-pick angle: any 3 points, one of them the vertex (index into p)
       motThr: 12, motAng: 35, motSpd: 2, motR: 0.12, motCx: null, motCy: null },   // MOT: change threshold (% in ~50 ms), circle size / centre (share of the camera picture)
     mot: { lastSig: 0 },  // MOT (motion circle) signal lockout
     motPlacing: false,
@@ -169,7 +172,9 @@
     const c = Pose.config, p = S.prefs;
     c.hand = p.aiHand;
     c.show = Object.assign({}, p.poseShow);
-    c.angle = { on: Object.assign({}, p.poseAngOn), target: p.poseAngTarget, tol: p.poseAngTol };
+    const pc = p.poseAngCustom || {};
+    c.angle = { on: Object.assign({}, p.poseAngOn), target: p.poseAngTarget, tol: p.poseAngTol,
+      custom: { on: !!pc.on, p: Array.isArray(pc.p) && pc.p.length === 3 ? pc.p.slice() : ['re', 'rw', 'ri'], vertex: [0, 1, 2].includes(pc.vertex) ? pc.vertex : 1 } };
     c.releaseSpeed = p.aiThr;
     c.interval = p.input === 'ai' ? 33 : 66;          // the release movement is short: sample faster in AI_trig mode
   }
@@ -395,6 +400,12 @@
         if (isFinite(p.aiThr)) d.aiThr = Core.clamp(Math.round(p.aiThr * 10) / 10, 0.5, 4);
         d.aiHand = p.aiHand === 'left' ? 'left' : 'right';
         if (p.poseAngOn && typeof p.poseAngOn === 'object') ['ls', 'rs', 'le', 're', 'lw', 'rw'].forEach((k) => { if (typeof p.poseAngOn[k] === 'boolean') d.poseAngOn[k] = p.poseAngOn[k]; });
+        if (p.poseAngCustom && typeof p.poseAngCustom === 'object') {
+          const pc = p.poseAngCustom;
+          if (typeof pc.on === 'boolean') d.poseAngCustom.on = pc.on;
+          if (Array.isArray(pc.p) && pc.p.length === 3 && pc.p.every((k) => ANGLE_POINTS.includes(k))) d.poseAngCustom.p = pc.p.slice();
+          if ([0, 1, 2].includes(pc.vertex)) d.poseAngCustom.vertex = pc.vertex;
+        }
         if (isFinite(p.poseAngTarget)) d.poseAngTarget = Core.clamp(Math.round(p.poseAngTarget / 5) * 5, 60, 180);
         if (isFinite(p.poseAngTol)) d.poseAngTol = Core.clamp(Math.round(p.poseAngTol), 0, 15);
         if (p.poseShow && typeof p.poseShow === 'object') ['rs', 'ls', 're', 'le', 'rw', 'lw', 'mouth'].forEach((k) => { if (typeof p.poseShow[k] === 'boolean') d.poseShow[k] = p.poseShow[k]; });
@@ -476,6 +487,8 @@
     $('pa-target').value = String(p.poseAngTarget); $('pa-target-text').textContent = p.poseAngTarget + '\u00B0';
     $('pa-tol').value = String(p.poseAngTol); $('pa-tol-text').textContent = p.poseAngTol + '\u00B0';
     ['ls', 'rs', 'le', 're', 'lw', 'rw', 'mouth'].forEach((k) => $('ps-' + k).classList.toggle('sel', !!p.poseShow[k]));
+    $('pac-on').classList.toggle('sel', !!p.poseAngCustom.on);
+    [0, 1, 2].forEach((i) => { $('pac-p' + i).value = p.poseAngCustom.p[i]; $('pac-v' + i).classList.toggle('sel', p.poseAngCustom.vertex === i); });
     $('mot-thr').value = String(p.motThr);
     $('mot-thr-text').textContent = p.motThr.toFixed(1) + ' %';
     $('mot-spd').value = String(p.motSpd);
@@ -2630,6 +2643,9 @@
     // pose estimation / AI_trig
     ['ls', 'rs', 'le', 're', 'lw', 'rw', 'mouth'].forEach((k) => $('ps-' + k).addEventListener('click', () => { S.prefs.poseShow[k] = !S.prefs.poseShow[k]; savePrefs(); applyPoseConfig(); refreshSettingsUi(); }));
     ['ls', 'rs', 'le', 're', 'lw', 'rw'].forEach((k) => $('pa-' + k).addEventListener('click', () => { S.prefs.poseAngOn[k] = !S.prefs.poseAngOn[k]; savePrefs(); applyPoseConfig(); refreshSettingsUi(); }));
+    $('pac-on').addEventListener('click', () => { S.prefs.poseAngCustom.on = !S.prefs.poseAngCustom.on; savePrefs(); applyPoseConfig(); refreshSettingsUi(); });
+    [0, 1, 2].forEach((i) => $('pac-p' + i).addEventListener('change', (e) => { if (ANGLE_POINTS.includes(e.target.value)) S.prefs.poseAngCustom.p[i] = e.target.value; savePrefs(); applyPoseConfig(); refreshSettingsUi(); }));
+    [0, 1, 2].forEach((i) => $('pac-v' + i).addEventListener('click', () => { S.prefs.poseAngCustom.vertex = i; savePrefs(); applyPoseConfig(); refreshSettingsUi(); }));
     $('pa-target').addEventListener('input', (e) => { S.prefs.poseAngTarget = Core.clamp(Math.round((parseFloat(e.target.value) || 180) / 5) * 5, 60, 180); savePrefs(); applyPoseConfig(); refreshSettingsUi(); });
     $('pa-tol').addEventListener('input', (e) => { S.prefs.poseAngTol = Core.clamp(Math.round(parseFloat(e.target.value)), 0, 15) || 0; savePrefs(); applyPoseConfig(); refreshSettingsUi(); });
     $('pose-on').addEventListener('change', (e) => { S.prefs.poseOn = !!e.target.checked; savePrefs(); applyPose(); refreshSettingsUi(); log('pose overlay', S.prefs.poseOn ? 'on' : 'off'); });

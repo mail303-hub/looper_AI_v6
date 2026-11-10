@@ -79,6 +79,8 @@
     // wrist = elbow-wrist-index (hand bend); 180 = straight
     const AJ = { le: [11, 13, 15], re: [12, 14, 16], ls: [12, 11, 13], rs: [11, 12, 14], lw: [13, 15, 19], rw: [14, 16, 20] };
     const AL = { le: [[11, 13], [13, 15]], re: [[12, 14], [14, 16]], ls: [[11, 12], [11, 13]], rs: [[11, 12], [12, 14]], lw: [[13, 15]], rw: [[14, 16]] };
+    // landmark index for each selectable point of a custom angle
+    const LMI = { ls: 11, rs: 12, le: 13, re: 14, lw: 15, rw: 16, lh: 23, rh: 24, li: 19, ri: 20 };
     const red = new Set(), angTxt = [];
     const AC = CFG.angle || {};
     Object.keys(AJ).forEach((k) => {
@@ -93,6 +95,28 @@
       if (bad) AL[k].forEach((l) => red.add(l[0] + '-' + l[1]));
       angTxt.push({ x: b.x, y: b.y, t: Math.round(ang) + '\u00B0', bad });
     });
+    // custom angle: any 3 picked points, one of them the vertex the angle is measured at and the lines are drawn from
+    let cust = null;
+    const CC = AC.custom;
+    if (CC && CC.on && Array.isArray(CC.p) && CC.p.length === 3) {
+      const idx = CC.p.map((k) => LMI[k]);
+      const vi = [0, 1, 2].includes(CC.vertex) ? CC.vertex : 1;
+      const oi = [0, 1, 2].filter((i) => i !== vi);
+      const vIdx = idx[vi], o0 = idx[oi[0]], o1 = idx[oi[1]];
+      if (lm[vIdx] && lm[o0] && lm[o1]) {
+        const b = P(vIdx), a = P(o0), c = P(o1);
+        if (a.v >= 0.4 && b.v >= 0.4 && c.v >= 0.4) {
+          const ux = a.x - b.x, uy = a.y - b.y, vx = c.x - b.x, vy = c.y - b.y;
+          const nu = Math.hypot(ux, uy), nv = Math.hypot(vx, vy);
+          if (nu >= 1 && nv >= 1) {
+            const ang = Math.acos(Math.max(-1, Math.min(1, (ux * vx + uy * vy) / (nu * nv)))) * 180 / Math.PI;
+            const bad = Math.abs(ang - AC.target) > AC.tol;
+            cust = { vIdx, oIdx: [o0, o1], bad };
+            angTxt.push({ x: b.x, y: b.y, t: Math.round(ang) + '\u00B0', bad });
+          }
+        }
+      }
+    }
     LINES.forEach((l) => {
       if (!shown(l[0]) || !shown(l[1])) return;
       const a = P(l[0]), b = P(l[1]);
@@ -100,6 +124,11 @@
       g.strokeStyle = red.has(l[0] + '-' + l[1]) ? 'rgba(248,81,73,0.98)' : 'rgba(63,185,80,0.95)';
       g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke();
     });
+    if (cust) {
+      g.strokeStyle = cust.bad ? 'rgba(248,81,73,0.98)' : 'rgba(63,185,80,0.95)';
+      const b = P(cust.vIdx);
+      cust.oIdx.forEach((oi2) => { const o = P(oi2); g.beginPath(); g.moveTo(b.x, b.y); g.lineTo(o.x, o.y); g.stroke(); });
+    }
     // face points the model finds: the mouth corners (9, 10)
     g.fillStyle = 'rgba(0,200,255,0.85)';
     [9, 10].forEach((i) => {
@@ -136,6 +165,14 @@
       if (p.v < 0.4) return;
       g.beginPath(); g.arc(p.x, p.y, 5, 0, Math.PI * 2); g.fill();
     });
+    if (cust) {
+      [cust.vIdx, ...cust.oIdx].forEach((i) => {
+        if (POINTS.includes(i)) return;   // already drawn above
+        const p = P(i);
+        if (p.v < 0.4) return;
+        g.beginPath(); g.arc(p.x, p.y, 5, 0, Math.PI * 2); g.fill();
+      });
+    }
     g.font = '600 13px system-ui, sans-serif'; g.textAlign = 'left';
     angTxt.forEach((q) => {
       g.lineWidth = 3.5; g.strokeStyle = 'rgba(0,0,0,0.75)'; g.strokeText(q.t, q.x + 10, q.y + 16);
