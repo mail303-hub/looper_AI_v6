@@ -40,6 +40,7 @@
   // newest 2 frames (averaged) and the 2 frames before (averaged). A block "moves" when it changed and
   // it is found shifted sideways by >= MINSHIFT px (and mostly horizontally).
   function process(gray, t) {
+    if (frames.length && t < frames[frames.length - 1].t) { reset(); lastTrig = -1e9; }   // video looped / jumped back
     frames.push({ t, g: gray });
     while (frames.length > 8) frames.shift();
     const L = frames.length;
@@ -113,12 +114,18 @@
     } catch (e) { /* frame not readable: skip */ }
   }
 
+  // live camera: wall clock; a video file: its own media time (so slow motion / seeking give the same result)
+  function tNow(meta) {
+    if (video && !video.srcObject) return (meta && meta.mediaTime !== undefined ? meta.mediaTime : video.currentTime) * 1000;
+    return performance.now();
+  }
+
   function loop(my) {
     if (!running || my !== token) return;
     if (video.requestVideoFrameCallback) {
-      rvfc = video.requestVideoFrameCallback(() => { grab(performance.now()); loop(my); });
+      rvfc = video.requestVideoFrameCallback((now, meta) => { grab(tNow(meta)); loop(my); });
     } else {
-      timer = setTimeout(() => { grab(performance.now()); loop(my); }, 33);
+      timer = setTimeout(() => { grab(tNow(null)); loop(my); }, 33);
     }
   }
 
@@ -141,6 +148,7 @@
     setRegion, clearRegion, region, config: cfg,
     onTrigger: (fn) => { onTrigger = fn; }, onLevel: (fn) => { onLevel = fn; },
     level: () => cur, peak: () => peak, resetPeak: () => { peak = 0; },
+    reset: () => { reset(); lastTrig = -1e9; peak = 0; },
     process   // tests
   };
 })();

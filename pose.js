@@ -73,21 +73,42 @@
     const P = (i) => ({ x: r.x + lm[i].x * r.w, y: r.y + lm[i].y * r.h, v: lm[i].visibility === undefined ? 1 : lm[i].visibility });
     g.lineWidth = 3; g.lineCap = 'round';
     g.strokeStyle = 'rgba(63,185,80,0.95)';
+    const SHOW = CFG.show || {};
+    const shown = (i) => ({ 11: SHOW.ls, 12: SHOW.rs, 13: SHOW.le, 14: SHOW.re, 15: SHOW.lw, 16: SHOW.rw })[i] !== false;
+    // joint angle check (in screen pixels): elbow = shoulder-elbow-wrist, shoulder = other shoulder-shoulder-elbow; 180 = straight
+    const AJ = { le: [11, 13, 15], re: [12, 14, 16], ls: [12, 11, 13], rs: [11, 12, 14] };
+    const AL = { le: [[11, 13], [13, 15]], re: [[12, 14], [14, 16]], ls: [[11, 12], [11, 13]], rs: [[11, 12], [12, 14]] };
+    const red = new Set(), angTxt = [];
+    const AC = CFG.angle || {};
+    Object.keys(AJ).forEach((k) => {
+      if (!(AC.on && AC.on[k])) return;
+      const [ia, ib, ic] = AJ[k], a = P(ia), b = P(ib), c = P(ic);
+      if (a.v < 0.4 || b.v < 0.4 || c.v < 0.4) return;
+      const ux = a.x - b.x, uy = a.y - b.y, vx = c.x - b.x, vy = c.y - b.y;
+      const nu = Math.hypot(ux, uy), nv = Math.hypot(vx, vy);
+      if (nu < 1 || nv < 1) return;
+      const ang = Math.acos(Math.max(-1, Math.min(1, (ux * vx + uy * vy) / (nu * nv)))) * 180 / Math.PI;
+      const bad = Math.abs(ang - AC.target) > AC.tol;
+      if (bad) AL[k].forEach((l) => red.add(l[0] + '-' + l[1]));
+      angTxt.push({ x: b.x, y: b.y, t: Math.round(ang) + '\u00B0', bad });
+    });
     LINES.forEach((l) => {
+      if (!shown(l[0]) || !shown(l[1])) return;
       const a = P(l[0]), b = P(l[1]);
       if (a.v < 0.4 || b.v < 0.4) return;
+      g.strokeStyle = red.has(l[0] + '-' + l[1]) ? 'rgba(248,81,73,0.98)' : 'rgba(63,185,80,0.95)';
       g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke();
     });
     // face points the model finds: the mouth corners (9, 10)
     g.fillStyle = 'rgba(0,200,255,0.85)';
     [9, 10].forEach((i) => {
-      if (!lm[i]) return;
+      if (!lm[i] || SHOW.mouth === false) return;
       const p = P(i);
       if (p.v < 0.4) return;
       g.beginPath(); g.arc(p.x, p.y, 4.5, 0, Math.PI * 2); g.fill();
     });
     // the point the distance is measured from: ring + label, and a line to the drawing wrist with the distance
-    if (lm[9] && lm[10] && lm[11] && lm[12]) {
+    if (SHOW.mouth !== false && lm[9] && lm[10] && lm[11] && lm[12]) {
       const rp = refPoint(lm);
       const rx = r.x + rp.x * r.w, ry = r.y + rp.y * r.h;
       const wi = CFG.hand === 'left' ? 15 : 16;
@@ -109,9 +130,15 @@
     }
     g.fillStyle = 'rgba(255,214,10,0.95)';
     POINTS.forEach((i) => {
+      if (!shown(i)) return;
       const p = P(i);
       if (p.v < 0.4) return;
       g.beginPath(); g.arc(p.x, p.y, 5, 0, Math.PI * 2); g.fill();
+    });
+    g.font = '600 13px system-ui, sans-serif'; g.textAlign = 'left';
+    angTxt.forEach((q) => {
+      g.lineWidth = 3.5; g.strokeStyle = 'rgba(0,0,0,0.75)'; g.strokeText(q.t, q.x + 10, q.y + 16);
+      g.fillStyle = q.bad ? 'rgba(248,81,73,1)' : 'rgba(63,185,80,1)'; g.fillText(q.t, q.x + 10, q.y + 16);
     });
   }
 
@@ -127,6 +154,8 @@
     releaseSpeed: 2.0,  // draw wrist moving away from the face faster than this = RELEASE
     cooldownMs: 1500,
     lostMs: 600,        // anchor lost without a fast move for this long = let-down (no release)
+    show: { rs: true, ls: true, re: true, le: true, rw: true, lw: true, mouth: true },   // which points are drawn (r = person's right: landmarks 12/14/16, l = left: 11/13/15)
+    angle: { on: { ls: false, rs: false, le: false, re: false }, target: 180, tol: 5 },   // joint angle check: a line turns red when the angle differs from target by more than tol (degrees)
     hand: 'right',      // shooter's drawing hand: 'right' (draws with the right hand) or 'left'
     interval: 66        // ms between detections (about 15 / s); AI_trig uses 33 for the short release movement
   };

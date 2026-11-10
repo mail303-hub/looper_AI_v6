@@ -76,10 +76,11 @@
     offsetMs: 0,
     prefs: { buf: 2, split: 0.5, cam: null, zoomOn: false, gridOn: false, gridSize: 100, gridInt: 5, gridColor: 'white', auto: false, orient: 'landscape', input: 'mic', slomoFps: SLOMO_DEFAULT, btName: BT_DEFAULT_NAME, fps: FPS_DEFAULT,
       room: '', mqttUrl: Phone.DEFAULT_URL, sndRoom: '', motionThr: MOTION_DEFAULT, sensorThr: MOTION_DEFAULT,
-      poseOn: false, poseLog: false, aiThr: 2.0, aiHand: 'right',
+      poseOn: false, poseLog: false, aiThr: 2.0, aiHand: 'right', poseAngOn: { ls: false, rs: false, le: false, re: false }, poseAngTarget: 180, poseAngTol: 5, poseShow: { rs: true, ls: true, re: true, le: true, rw: true, lw: true, mouth: true },
       motThr: 12, motAng: 35, motSpd: 2, motR: 0.12, motCx: null, motCy: null },   // MOT: change threshold (% in ~50 ms), circle size / centre (share of the camera picture)
     mot: { lastSig: 0 },  // MOT (motion circle) signal lockout
     motPlacing: false,
+    motTest: null,        // MOT test on a video file: { url, count, times }
     ai: { lastSig: 0 },   // AI_trig (pose) signal lockout, same role as S.bt / S.ph
     zoom: { s: 1, tx: 0, ty: 0 },
     cams: [], camId: null,
@@ -167,6 +168,8 @@
     if (!Pose) return;
     const c = Pose.config, p = S.prefs;
     c.hand = p.aiHand;
+    c.show = Object.assign({}, p.poseShow);
+    c.angle = { on: Object.assign({}, p.poseAngOn), target: p.poseAngTarget, tol: p.poseAngTol };
     c.releaseSpeed = p.aiThr;
     c.interval = p.input === 'ai' ? 33 : 66;          // the release movement is short: sample faster in AI_trig mode
   }
@@ -186,11 +189,80 @@
 
   // ---- MOT: motion circle trigger -----------------------------------------------
   // the camera picture is shown with object-fit: contain, find the rectangle it really occupies on the screen
-  function videoRectScreen() {
-    const W = window.innerWidth || 1, H = window.innerHeight || 1;
-    const vw = S.live.videoWidth || W, vh = S.live.videoHeight || H;
+  function rectIn(W, H, vw0, vh0) {
+    const vw = vw0 || W, vh = vh0 || H;
     const s = Math.min(W / vw, H / vh);
     return { x: (W - vw * s) / 2, y: (H - vh * s) / 2, w: vw * s, h: vh * s, vw, vh };
+  }
+  function videoRectScreen() { return rectIn(window.innerWidth || 1, window.innerHeight || 1, S.live.videoWidth, S.live.videoHeight); }
+
+  // ---- MOT test on a video file ------------------------------------------------
+  function openMotTest(file) {
+    if (S.mode !== 'live') return;
+    if (S.prefs.input !== 'mot') setInput('mot');
+    closePanel();
+    const v = $('mot-test-video');
+    if (S.motTest) URL.revokeObjectURL(S.motTest.url);
+    S.motTest = { url: URL.createObjectURL(file), count: 0, times: [] };
+    if (Motion) Motion.stop();
+    show('mot-test', true);
+    v.src = S.motTest.url;
+    v.playbackRate = 1;
+    document.querySelectorAll('.mt-rate').forEach((x) => x.classList.toggle('sel', x.dataset.rate === '1'));
+    v.onloadedmetadata = () => {
+      syncMotRegion();
+      if (Motion) { Motion.reset(); Motion.start(v); }
+      v.play().catch(() => { /* needs a tap */ });
+      updateMotUi(); refreshMotTestUi();
+    };
+    v.onerror = () => { $('mt-list').textContent = 'This video cannot be played on this device.'; };
+    refreshMotTestUi();
+    log('motion test video', file.name);
+  }
+
+  function closeMotTest() {
+    const v = $('mot-test-video');
+    try { v.pause(); } catch (e) { /* ignore */ }
+    if (Motion) Motion.stop();
+    if (S.motTest) URL.revokeObjectURL(S.motTest.url);
+    S.motTest = null;
+    v.removeAttribute('src'); v.load();
+    show('mot-test', false);
+    applyMotion();
+    updateMotUi();
+    openPanel();
+  }
+
+  function motTestTrigger() {
+    const v = $('mot-test-video');
+    S.motTest.count++;
+    S.motTest.times.push(v.currentTime);
+    const c = $('mot-test-circle'); c.classList.add('hit'); setTimeout(() => c.classList.remove('hit'), 300);
+    refreshMotTestUi();
+  }
+
+  function refreshMotTestUi() {
+    if (!S.motTest) return;
+    const v = $('mot-test-video'), p = S.prefs;
+    $('mt-time').textContent = (v.currentTime || 0).toFixed(2) + ' / ' + (isFinite(v.duration) ? v.duration.toFixed(2) : '0.00') + ' s';
+    if (v.duration && document.activeElement !== $('mt-seek')) $('mt-seek').value = String(Math.round(v.currentTime / v.duration * 1000));
+    $('mt-play').textContent = v.paused ? 'Play' : 'Pause';
+    $('mt-count').textContent = String(S.motTest.count);
+    $('mt-list').textContent = S.motTest.times.length ? S.motTest.times.slice(-12).map((t) => t.toFixed(2) + ' s').join('   ') : 'No trigger yet.';
+    $('mot-test-hint').style.display = motRegionSet() ? 'none' : '';
+    $('mt-thr-text').textContent = p.motThr.toFixed(1) + ' %'; $('mt-thr').value = String(p.motThr);
+    $('mt-spd-text').textContent = p.motSpd.toFixed(1); $('mt-spd').value = String(p.motSpd);
+    $('mt-ang-text').textContent = p.motAng + '°'; $('mt-ang').value = String(p.motAng);
+    $('mt-r-text').textContent = String(Math.round(p.motR * 100)); $('mt-r').value = String(Math.round(p.motR * 100));
+    $('mt-thr-mark').style.left = Math.min(100, p.motThr / 40 * 100) + '%';
+    // circle on the stage
+    const st = $('mot-test-stage').getBoundingClientRect(), el = $('mot-test-circle');
+    if (motRegionSet() && v.videoWidth) {
+      const r = rectIn(st.width, st.height, v.videoWidth, v.videoHeight);
+      const rad = p.motR * Math.min(r.vw, r.vh) * (r.w / r.vw);
+      el.style.display = 'block'; el.style.width = el.style.height = (rad * 2) + 'px';
+      el.style.left = (r.x + p.motCx * r.w - rad) + 'px'; el.style.top = (r.y + p.motCy * r.h - rad) + 'px';
+    } else el.style.display = 'none';
   }
 
   function motRegionSet() { return S.prefs.motCx !== null && S.prefs.motCy !== null; }
@@ -223,7 +295,7 @@
   // motion runs on the live view and also while a clip plays (AUTO MODE accepts signals then)
   function applyMotion() {
     if (!Motion) return;
-    const want = S.prefs.input === 'mot' && S.running && motRegionSet() && (S.mode === 'live' || S.mode === 'pending' || S.mode === 'playback');
+    const want = !S.motTest && S.prefs.input === 'mot' && S.running && motRegionSet() && (S.mode === 'live' || S.mode === 'pending' || S.mode === 'playback');
     if (want) { syncMotRegion(); if (!Motion.isRunning()) Motion.start(S.live); }
     else if (Motion.isRunning()) Motion.stop();
   }
@@ -322,6 +394,10 @@
         d.poseLog = !!p.poseLog;
         if (isFinite(p.aiThr)) d.aiThr = Core.clamp(Math.round(p.aiThr * 10) / 10, 0.5, 4);
         d.aiHand = p.aiHand === 'left' ? 'left' : 'right';
+        if (p.poseAngOn && typeof p.poseAngOn === 'object') ['ls', 'rs', 'le', 're'].forEach((k) => { if (typeof p.poseAngOn[k] === 'boolean') d.poseAngOn[k] = p.poseAngOn[k]; });
+        if (isFinite(p.poseAngTarget)) d.poseAngTarget = Core.clamp(Math.round(p.poseAngTarget / 5) * 5, 60, 180);
+        if (isFinite(p.poseAngTol)) d.poseAngTol = Core.clamp(Math.round(p.poseAngTol), 0, 15);
+        if (p.poseShow && typeof p.poseShow === 'object') ['rs', 'ls', 're', 'le', 'rw', 'lw', 'mouth'].forEach((k) => { if (typeof p.poseShow[k] === 'boolean') d.poseShow[k] = p.poseShow[k]; });
         if (isFinite(p.motThr)) d.motThr = Core.clamp(Math.round(p.motThr * 2) / 2, 1, 40);
         if (isFinite(p.motSpd)) d.motSpd = Core.clamp(Math.round(p.motSpd * 2) / 2, 0.5, 10);
         if (isFinite(p.motAng)) d.motAng = Core.clamp(Math.round(p.motAng / 5) * 5, 5, 80);
@@ -396,6 +472,10 @@
     $('pose-on').checked = p.poseOn;
     $('pose-log-on').checked = p.poseLog;
     ['right', 'left'].forEach((m) => $('ai-h-' + m).classList.toggle('sel', p.aiHand === m));
+    ['ls', 'rs', 'le', 're'].forEach((k) => $('pa-' + k).classList.toggle('sel', !!p.poseAngOn[k]));
+    $('pa-target').value = String(p.poseAngTarget); $('pa-target-text').textContent = p.poseAngTarget + '\u00B0';
+    $('pa-tol').value = String(p.poseAngTol); $('pa-tol-text').textContent = p.poseAngTol + '\u00B0';
+    ['ls', 'rs', 'le', 're', 'lw', 'rw', 'mouth'].forEach((k) => $('ps-' + k).classList.toggle('sel', !!p.poseShow[k]));
     $('mot-thr').value = String(p.motThr);
     $('mot-thr-text').textContent = p.motThr.toFixed(1) + ' %';
     $('mot-spd').value = String(p.motSpd);
@@ -2431,6 +2511,7 @@
     try { if (Pose) Pose.stop(); } catch (e) { /* ignore */ }
     try { if (Motion) Motion.stop(); } catch (e) { /* ignore */ }
     S.motPlacing = false;
+    if (S.motTest) { try { URL.revokeObjectURL(S.motTest.url); } catch (e) { /* ignore */ } S.motTest = null; show('mot-test', false); }
     discardClip();
     try { if (S.wake) await S.wake.release(); } catch (e) { /* ignore */ }
     S.wake = null;
@@ -2506,14 +2587,40 @@
     // MOT: icon under the gear -> tap the place for the circle; settings sliders
     $('btn-mot-place').addEventListener('click', () => setMotPlacing(!S.motPlacing));
     $('mot-place').addEventListener('pointerup', (e) => { e.preventDefault(); placeMotCircle(e.clientX, e.clientY); });
-    $('mot-thr').addEventListener('input', (e) => { S.prefs.motThr = Core.clamp(Math.round((parseFloat(e.target.value) || 12) * 2) / 2, 1, 40); savePrefs(); if (Motion) Motion.config.thr = S.prefs.motThr; refreshSettingsUi(); });
-    $('mot-spd').addEventListener('input', (e) => { S.prefs.motSpd = Core.clamp(Math.round((parseFloat(e.target.value) || 2) * 2) / 2, 0.5, 10); savePrefs(); if (Motion) Motion.config.spd = S.prefs.motSpd; refreshSettingsUi(); });
-    $('mot-ang').addEventListener('input', (e) => { S.prefs.motAng = Core.clamp(Math.round((parseFloat(e.target.value) || 35) / 5) * 5, 5, 80); savePrefs(); if (Motion) Motion.config.ang = S.prefs.motAng; refreshSettingsUi(); });
-    $('mot-r').addEventListener('input', (e) => { S.prefs.motR = Core.clamp((parseFloat(e.target.value) || 12) / 100, 0.04, 0.30); savePrefs(); syncMotRegion(); updateMotUi(); refreshSettingsUi(); });
+    // MOT sliders (Settings and the video test view share the same values)
+    const motSet = {
+      thr: (v) => { S.prefs.motThr = Core.clamp(Math.round((parseFloat(v) || 12) * 2) / 2, 1, 40); if (Motion) Motion.config.thr = S.prefs.motThr; },
+      spd: (v) => { S.prefs.motSpd = Core.clamp(Math.round((parseFloat(v) || 2) * 2) / 2, 0.5, 10); if (Motion) Motion.config.spd = S.prefs.motSpd; },
+      ang: (v) => { S.prefs.motAng = Core.clamp(Math.round((parseFloat(v) || 35) / 5) * 5, 5, 80); if (Motion) Motion.config.ang = S.prefs.motAng; },
+      r: (v) => { S.prefs.motR = Core.clamp((parseFloat(v) || 12) / 100, 0.04, 0.30); syncMotRegion(); }
+    };
+    ['thr', 'spd', 'ang', 'r'].forEach((k) => {
+      [$('mot-' + k), $('mt-' + k)].forEach((el) => el.addEventListener('input', (e) => { motSet[k](e.target.value); savePrefs(); updateMotUi(); refreshSettingsUi(); refreshMotTestUi(); }));
+    });
+    // MOT test on a video file
+    $('mot-vid-file').addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) openMotTest(f); });
+    $('mt-close').addEventListener('click', closeMotTest);
+    $('mt-play').addEventListener('click', () => { const v = $('mot-test-video'); if (v.paused) v.play(); else v.pause(); refreshMotTestUi(); });
+    $('mt-seek').addEventListener('input', (e) => { const v = $('mot-test-video'); if (v.duration) v.currentTime = (parseFloat(e.target.value) / 1000) * v.duration; });
+    document.querySelectorAll('.mt-rate').forEach((b) => b.addEventListener('click', () => {
+      $('mot-test-video').playbackRate = parseFloat(b.dataset.rate);
+      document.querySelectorAll('.mt-rate').forEach((x) => x.classList.toggle('sel', x === b));
+    }));
+    $('mt-reset').addEventListener('click', () => { if (S.motTest) { S.motTest.count = 0; S.motTest.times = []; } if (Motion) Motion.reset(); refreshMotTestUi(); });
+    $('mot-test-video').addEventListener('seeked', () => { if (Motion && S.motTest) Motion.reset(); });
+    $('mot-test-video').addEventListener('timeupdate', refreshMotTestUi);
+    $('mot-test-stage').addEventListener('pointerup', (e) => {
+      const st = $('mot-test-stage').getBoundingClientRect(), v = $('mot-test-video');
+      const r = rectIn(st.width, st.height, v.videoWidth, v.videoHeight);
+      S.prefs.motCx = Core.clamp((e.clientX - st.left - r.x) / r.w, 0, 1);
+      S.prefs.motCy = Core.clamp((e.clientY - st.top - r.y) / r.h, 0, 1);
+      savePrefs(); syncMotRegion(); if (Motion) Motion.reset(); updateMotUi(); refreshMotTestUi(); refreshSettingsUi();
+    });
     $('btn-mot-clear').addEventListener('click', () => { S.prefs.motCx = null; S.prefs.motCy = null; savePrefs(); syncMotRegion(); applyMotion(); updateMotUi(); refreshSettingsUi(); updateStatus(); log('motion circle removed'); });
     if (Motion) {
-      Motion.onTrigger(() => { if (S.prefs.input === 'mot') { onRemoteSignal('mot', S.mot); const c = $('mot-circle'); c.classList.add('hit'); setTimeout(() => c.classList.remove('hit'), 300); } });
-      Motion.onLevel((v) => {
+      Motion.onTrigger(() => { if (S.motTest) { motTestTrigger(); return; } if (S.prefs.input === 'mot') { onRemoteSignal('mot', S.mot); const c = $('mot-circle'); c.classList.add('hit'); setTimeout(() => c.classList.remove('hit'), 300); } });
+      Motion.onLevel((v, pk) => {
+        if (S.motTest) { $('mt-now').textContent = v.toFixed(1) + ' / ' + (pk || 0).toFixed(1) + ' %'; $('mt-fill').style.width = Math.min(100, v / 40 * 100) + '%'; return; }
         if (!S.panelOpen) return;
         $('mot-now').textContent = v.toFixed(1) + ' %';
         $('mot-fill').style.width = Math.min(100, v / 40 * 100) + '%';
@@ -2521,6 +2628,10 @@
     }
 
     // pose estimation / AI_trig
+    ['ls', 'rs', 'le', 're', 'lw', 'rw', 'mouth'].forEach((k) => $('ps-' + k).addEventListener('click', () => { S.prefs.poseShow[k] = !S.prefs.poseShow[k]; savePrefs(); applyPoseConfig(); refreshSettingsUi(); }));
+    ['ls', 'rs', 'le', 're'].forEach((k) => $('pa-' + k).addEventListener('click', () => { S.prefs.poseAngOn[k] = !S.prefs.poseAngOn[k]; savePrefs(); applyPoseConfig(); refreshSettingsUi(); }));
+    $('pa-target').addEventListener('input', (e) => { S.prefs.poseAngTarget = Core.clamp(Math.round((parseFloat(e.target.value) || 180) / 5) * 5, 60, 180); savePrefs(); applyPoseConfig(); refreshSettingsUi(); });
+    $('pa-tol').addEventListener('input', (e) => { S.prefs.poseAngTol = Core.clamp(Math.round(parseFloat(e.target.value)), 0, 15) || 0; savePrefs(); applyPoseConfig(); refreshSettingsUi(); });
     $('pose-on').addEventListener('change', (e) => { S.prefs.poseOn = !!e.target.checked; savePrefs(); applyPose(); refreshSettingsUi(); log('pose overlay', S.prefs.poseOn ? 'on' : 'off'); });
     ['right', 'left'].forEach((m) => $('ai-h-' + m).addEventListener('click', () => { S.prefs.aiHand = m; savePrefs(); applyPoseConfig(); refreshSettingsUi(); log('AI shooter', m + ' hand'); }));
     $('ai-thr').addEventListener('input', (e) => { S.prefs.aiThr = Core.clamp(Math.round((parseFloat(e.target.value) || 2) * 10) / 10, 0.5, 4); savePrefs(); applyPoseConfig(); refreshSettingsUi(); });
@@ -2664,7 +2775,7 @@
       $('gc-' + c).addEventListener('click', () => { S.prefs.gridColor = c; savePrefs(); refreshSettingsUi(); applyGrid(); });
     });
 
-    window.addEventListener('resize', () => { applyGrid(); applyZoom(); updateMotUi(); });
+    window.addEventListener('resize', () => { applyGrid(); applyZoom(); updateMotUi(); refreshMotTestUi(); });
 
     // Lifecycle: browsers stop camera/mic when the page is hidden, so shut down cleanly.
     document.addEventListener('visibilitychange', () => {

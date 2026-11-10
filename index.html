@@ -65,6 +65,35 @@
     </div>
   </div>
 
+
+  <!-- MOT test on a video file (instead of the live camera) -->
+  <div id="mot-test" class="hidden">
+    <div id="mot-test-stage">
+      <video id="mot-test-video" playsinline muted loop></video>
+      <div id="mot-test-circle"></div>
+      <div id="mot-test-hint">Tap on the picture to place the circle</div>
+    </div>
+    <div id="mot-test-side">
+      <div class="panel-head"><div class="panel-title">MOT VIDEO TEST</div><button id="mt-close" class="btn small" type="button">Close</button></div>
+      <div class="row"><button id="mt-play" class="btn small" type="button">Pause</button><span id="mt-time" class="val">0.00 / 0.00 s</span></div>
+      <input id="mt-seek" type="range" min="0" max="1000" step="1" value="0" aria-label="Video position">
+      <div class="seg"><button class="btn small mt-rate" data-rate="0.25" type="button">0.25×</button><button class="btn small mt-rate" data-rate="0.5" type="button">0.5×</button><button class="btn small mt-rate sel" data-rate="1" type="button">1×</button></div>
+      <div class="row"><span>Motion now / peak</span><span id="mt-now" class="val">–</span></div>
+      <div class="meter"><div id="mt-fill"></div><div id="mt-thr-mark"></div></div>
+      <div class="row"><span>Triggers: <b id="mt-count">0</b></span><button id="mt-reset" class="btn small" type="button">Reset</button></div>
+      <div id="mt-list" class="hint">No trigger yet.</div>
+      <div class="row"><span>Sideways motion (% of circle)</span><span id="mt-thr-text">12 %</span></div>
+      <input id="mt-thr" type="range" min="1" max="40" step="0.5" value="12">
+      <div class="row"><span>Minimum speed (diameters / s)</span><span id="mt-spd-text">2.0</span></div>
+      <input id="mt-spd" type="range" min="0.5" max="10" step="0.5" value="2">
+      <div class="row"><span>Direction tolerance</span><span id="mt-ang-text">35°</span></div>
+      <input id="mt-ang" type="range" min="5" max="80" step="5" value="35">
+      <div class="row"><span>Circle size</span><span id="mt-r-text">12</span></div>
+      <input id="mt-r" type="range" min="4" max="30" step="1" value="12">
+      <div class="hint">The same settings as in Settings. A trigger here only marks the time, no clip is recorded.</div>
+    </div>
+  </div>
+
   <!-- Settings panel -->
   <div id="panel" class="panel hidden">
     <div id="panel-box" class="panel-box">
@@ -108,6 +137,20 @@
         <section id="sec-ai" class="sec">
           <h3>AI_trig (pose estimation)</h3>
           <label class="chk"><input id="pose-on" type="checkbox"> <span>Show pose on the live view</span></label>
+          <div>Points shown</div>
+          <div class="seg"><button id="ps-ls" class="btn small sel" type="button">L shoulder</button><button id="ps-rs" class="btn small sel" type="button">R shoulder</button></div>
+          <div class="seg"><button id="ps-le" class="btn small sel" type="button">L elbow</button><button id="ps-re" class="btn small sel" type="button">R elbow</button></div>
+          <div class="seg"><button id="ps-lw" class="btn small sel" type="button">L wrist</button><button id="ps-rw" class="btn small sel" type="button">R wrist</button></div>
+          <div class="seg"><button id="ps-mouth" class="btn small sel" type="button">Mouth (reference)</button></div>
+          <div class="hint">L / R = the person's left / right side. Hidden points are only not drawn; detection still works.</div>
+          <div>Angle check (line turns red)</div>
+          <div class="seg"><button id="pa-le" class="btn small" type="button">L elbow</button><button id="pa-re" class="btn small" type="button">R elbow</button></div>
+          <div class="seg"><button id="pa-ls" class="btn small" type="button">L shoulder</button><button id="pa-rs" class="btn small" type="button">R shoulder</button></div>
+          <div class="row"><span>Target angle</span><span id="pa-target-text">180°</span></div>
+          <input id="pa-target" type="range" min="60" max="180" step="5" value="180" aria-label="Target angle">
+          <div class="row"><span>Allowed deviation (x)</span><span id="pa-tol-text">5°</span></div>
+          <input id="pa-tol" type="range" min="0" max="15" step="1" value="5" aria-label="Allowed deviation">
+          <div class="hint">Elbow angle = shoulder-elbow-wrist; shoulder angle = other shoulder-shoulder-elbow. 180° = straight. When the angle differs from the target by more than x°, the lines at that joint turn red.</div>
           <div class="row"><span>Release speed</span><span id="ai-thr-text">2.0</span></div>
           <input id="ai-thr" type="range" min="0.5" max="4" step="0.1" value="2" aria-label="AI release speed threshold">
           <div class="row dim"><span>more sensitive</span><span>less sensitive</span></div>
@@ -142,6 +185,7 @@
           <input id="mot-r" type="range" min="4" max="30" step="1" value="12" aria-label="Motion circle size">
           <div class="row"><span>Motion now</span><span id="mot-now">–</span></div>
           <div class="meter"><div id="mot-fill"></div><div id="mot-thr-mark"></div></div>
+          <label class="btn small wide" id="mot-vid-label" style="text-align:center">Test on a video file…<input id="mot-vid-file" type="file" accept="video/*" hidden></label>
           <button id="btn-mot-clear" class="btn small wide" type="button">Remove circle</button>
           <div id="mot-info" class="hint">No circle yet.</div>
         </section>
@@ -269,7 +313,7 @@
       <div class="row">
         <button id="btn-debug" class="btn small" type="button">Debug</button>
         <button id="btn-debug-copy" class="btn small hidden" type="button">Copy log</button>
-        <span class="dim">v7.4.0</span>
+        <span class="dim">v7.8.0</span>
       </div>
       <pre id="debug-log" class="hidden"></pre>
     </div>
@@ -285,7 +329,7 @@
       <button id="btn-sender" class="btn" type="button">MOTION SENDER</button>
     </div>
     <div id="start-msg" class="start-msg"></div>
-    <div class="ver">v7.4.0</div>
+    <div class="ver">v7.8.0</div>
   </div>
 
   <!-- MOTION SENDER: this phone is the motion sensor, it sends MOT to the looper phone -->
@@ -319,7 +363,7 @@
         <button id="btn-snd-back" class="btn small" type="button">Back</button>
       </div>
       <div id="snd-fs-hint" class="hint hidden">This browser cannot go full screen. On iPhone add the app to the Home Screen (Share → Add to Home Screen) and start it from there: then the browser bars are gone.</div>
-      <div class="row dim"><span></span><span>v7.4.0</span></div>
+      <div class="row dim"><span></span><span>v7.8.0</span></div>
       <div id="snd-status" class="start-msg">Enter the room code shown on the looper phone.</div>
     </div>
     <!-- while the sensor runs: the whole screen ignores touches, only the gear (hold it) opens the settings again -->
