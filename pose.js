@@ -75,99 +75,78 @@
     g.strokeStyle = 'rgba(63,185,80,0.95)';
     const SHOW = CFG.show || {};
     const shown = (i) => ({ 11: SHOW.ls, 12: SHOW.rs, 13: SHOW.le, 14: SHOW.re, 15: SHOW.lw, 16: SHOW.rw })[i] !== false;
-    // joint angle check (in screen pixels): elbow = shoulder-elbow-wrist, shoulder = other shoulder-shoulder-elbow,
-    // wrist = elbow-wrist-index (hand bend); 180 = straight
-    const AJ = { le: [11, 13, 15], re: [12, 14, 16], ls: [12, 11, 13], rs: [11, 12, 14], lw: [13, 15, 19], rw: [14, 16, 20] };
-    const AL = { le: [[11, 13], [13, 15]], re: [[12, 14], [14, 16]], ls: [[11, 12], [11, 13]], rs: [[11, 12], [12, 14]], lw: [[13, 15]], rw: [[14, 16]] };
-    // landmark index for each selectable point of a custom angle
+    // landmark index for each selectable point of the angle check
     const LMI = { ls: 11, rs: 12, le: 13, re: 14, lw: 15, rw: 16, lh: 23, rh: 24, li: 19, ri: 20 };
-    const red = new Set(), angTxt = [];
+    const angTxt = [];
+    // angle check: pick any 3 points; the middle one (index 1) is the vertex the angle is measured
+    // at and the lines are drawn from; a line turns red when the angle is off target by more than the tolerance
+    let ang = null;
     const AC = CFG.angle || {};
-    Object.keys(AJ).forEach((k) => {
-      if (!(AC.on && AC.on[k])) return;
-      const [ia, ib, ic] = AJ[k], a = P(ia), b = P(ib), c = P(ic);
-      if (a.v < 0.4 || b.v < 0.4 || c.v < 0.4) return;
-      const ux = a.x - b.x, uy = a.y - b.y, vx = c.x - b.x, vy = c.y - b.y;
-      const nu = Math.hypot(ux, uy), nv = Math.hypot(vx, vy);
-      if (nu < 1 || nv < 1) return;
-      const ang = Math.acos(Math.max(-1, Math.min(1, (ux * vx + uy * vy) / (nu * nv)))) * 180 / Math.PI;
-      const bad = Math.abs(ang - AC.target) > AC.tol;
-      if (bad) AL[k].forEach((l) => red.add(l[0] + '-' + l[1]));
-      angTxt.push({ x: b.x, y: b.y, t: Math.round(ang) + '\u00B0', bad });
-    });
-    // custom angle: any 3 picked points, one of them the vertex the angle is measured at and the lines are drawn from
-    let cust = null;
-    const CC = AC.custom;
-    if (CC && CC.on && Array.isArray(CC.p) && CC.p.length === 3) {
-      const idx = CC.p.map((k) => LMI[k]);
-      const vi = [0, 1, 2].includes(CC.vertex) ? CC.vertex : 1;
-      const oi = [0, 1, 2].filter((i) => i !== vi);
-      const vIdx = idx[vi], o0 = idx[oi[0]], o1 = idx[oi[1]];
+    if (AC.on && Array.isArray(AC.p) && AC.p.length === 3) {
+      const idx = AC.p.map((k) => LMI[k]);
+      const vIdx = idx[1], o0 = idx[0], o1 = idx[2];
       if (lm[vIdx] && lm[o0] && lm[o1]) {
         const b = P(vIdx), a = P(o0), c = P(o1);
         if (a.v >= 0.4 && b.v >= 0.4 && c.v >= 0.4) {
           const ux = a.x - b.x, uy = a.y - b.y, vx = c.x - b.x, vy = c.y - b.y;
           const nu = Math.hypot(ux, uy), nv = Math.hypot(vx, vy);
           if (nu >= 1 && nv >= 1) {
-            const ang = Math.acos(Math.max(-1, Math.min(1, (ux * vx + uy * vy) / (nu * nv)))) * 180 / Math.PI;
-            const bad = Math.abs(ang - AC.target) > AC.tol;
-            cust = { vIdx, oIdx: [o0, o1], bad };
-            angTxt.push({ x: b.x, y: b.y, t: Math.round(ang) + '\u00B0', bad });
+            const deg = Math.acos(Math.max(-1, Math.min(1, (ux * vx + uy * vy) / (nu * nv)))) * 180 / Math.PI;
+            const bad = Math.abs(deg - AC.target) > AC.tol;
+            ang = { vIdx, oIdx: [o0, o1], bad };
+            angTxt.push({ x: b.x, y: b.y, t: Math.round(deg) + '\u00B0', bad });
           }
         }
       }
     }
-    LINES.forEach((l) => {
-      if (!shown(l[0]) || !shown(l[1])) return;
-      const a = P(l[0]), b = P(l[1]);
-      if (a.v < 0.4 || b.v < 0.4) return;
-      g.strokeStyle = red.has(l[0] + '-' + l[1]) ? 'rgba(248,81,73,0.98)' : 'rgba(63,185,80,0.95)';
-      g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke();
-    });
-    if (cust) {
-      g.strokeStyle = cust.bad ? 'rgba(248,81,73,0.98)' : 'rgba(63,185,80,0.95)';
-      const b = P(cust.vIdx);
-      cust.oIdx.forEach((oi2) => { const o = P(oi2); g.beginPath(); g.moveTo(b.x, b.y); g.lineTo(o.x, o.y); g.stroke(); });
+    if (ang) {
+      g.strokeStyle = ang.bad ? 'rgba(248,81,73,0.98)' : 'rgba(63,185,80,0.95)';
+      const b = P(ang.vIdx);
+      ang.oIdx.forEach((oi) => { const o = P(oi); g.beginPath(); g.moveTo(b.x, b.y); g.lineTo(o.x, o.y); g.stroke(); });
+      g.fillStyle = 'rgba(255,214,10,0.95)';
+      [ang.vIdx, ...ang.oIdx].forEach((i) => { const p = P(i); if (p.v < 0.4) return; g.beginPath(); g.arc(p.x, p.y, 5, 0, Math.PI * 2); g.fill(); });
     }
-    // face points the model finds: the mouth corners (9, 10)
-    g.fillStyle = 'rgba(0,200,255,0.85)';
-    [9, 10].forEach((i) => {
-      if (!lm[i] || SHOW.mouth === false) return;
-      const p = P(i);
-      if (p.v < 0.4) return;
-      g.beginPath(); g.arc(p.x, p.y, 4.5, 0, Math.PI * 2); g.fill();
-    });
-    // the point the distance is measured from: ring + label, and a line to the drawing wrist with the distance
-    if (SHOW.mouth !== false && lm[9] && lm[10] && lm[11] && lm[12]) {
-      const rp = refPoint(lm);
-      const rx = r.x + rp.x * r.w, ry = r.y + rp.y * r.h;
-      const wi = CFG.hand === 'left' ? 15 : 16;
-      const wp = P(wi);
-      const sw = dist(lm[11], lm[12]);
-      g.strokeStyle = 'rgba(0,200,255,0.95)'; g.lineWidth = 2.5;
-      g.beginPath(); g.arc(rx, ry, 10, 0, Math.PI * 2); g.stroke();
-      if (wp.v >= 0.4 && sw > 0.03) {
-        g.save(); g.setLineDash([6, 5]); g.lineWidth = 2;
-        g.beginPath(); g.moveTo(wp.x, wp.y); g.lineTo(rx, ry); g.stroke(); g.restore();
-        g.font = '600 14px system-ui, sans-serif'; g.textAlign = 'center'; g.fillStyle = 'rgba(0,200,255,1)';
-        const dTxt = (dist(lm[wi], rp) / sw).toFixed(2), dx = (wp.x + rx) / 2 + 14, dy = (wp.y + ry) / 2;
-        g.lineWidth = 3.5; g.strokeStyle = 'rgba(0,0,0,0.75)'; g.strokeText(dTxt, dx, dy);
-        g.fillText(dTxt, dx, dy);
+    // points shown: the plain skeleton (dots + green bone lines) and the mouth reference; a separate block, own on/off
+    if (SHOW.on !== false) {
+      LINES.forEach((l) => {
+        if (!shown(l[0]) || !shown(l[1])) return;
+        const a = P(l[0]), b = P(l[1]);
+        if (a.v < 0.4 || b.v < 0.4) return;
+        g.strokeStyle = 'rgba(63,185,80,0.95)';
+        g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke();
+      });
+      // face points the model finds: the mouth corners (9, 10)
+      g.fillStyle = 'rgba(0,200,255,0.85)';
+      [9, 10].forEach((i) => {
+        if (!lm[i] || SHOW.mouth === false) return;
+        const p = P(i);
+        if (p.v < 0.4) return;
+        g.beginPath(); g.arc(p.x, p.y, 4.5, 0, Math.PI * 2); g.fill();
+      });
+      // the point the distance is measured from: ring + label, and a line to the drawing wrist with the distance
+      if (SHOW.mouth !== false && lm[9] && lm[10] && lm[11] && lm[12]) {
+        const rp = refPoint(lm);
+        const rx = r.x + rp.x * r.w, ry = r.y + rp.y * r.h;
+        const wi = CFG.hand === 'left' ? 15 : 16;
+        const wp = P(wi);
+        const sw = dist(lm[11], lm[12]);
+        g.strokeStyle = 'rgba(0,200,255,0.95)'; g.lineWidth = 2.5;
+        g.beginPath(); g.arc(rx, ry, 10, 0, Math.PI * 2); g.stroke();
+        if (wp.v >= 0.4 && sw > 0.03) {
+          g.save(); g.setLineDash([6, 5]); g.lineWidth = 2;
+          g.beginPath(); g.moveTo(wp.x, wp.y); g.lineTo(rx, ry); g.stroke(); g.restore();
+          g.font = '600 14px system-ui, sans-serif'; g.textAlign = 'center'; g.fillStyle = 'rgba(0,200,255,1)';
+          const dTxt = (dist(lm[wi], rp) / sw).toFixed(2), dx = (wp.x + rx) / 2 + 14, dy = (wp.y + ry) / 2;
+          g.lineWidth = 3.5; g.strokeStyle = 'rgba(0,0,0,0.75)'; g.strokeText(dTxt, dx, dy);
+          g.fillText(dTxt, dx, dy);
+        }
+        g.font = '600 13px system-ui, sans-serif'; g.textAlign = 'left'; g.fillStyle = 'rgba(0,200,255,1)';
+        g.lineWidth = 3.5; g.strokeStyle = 'rgba(0,0,0,0.75)'; g.strokeText('MOUTH', rx + 14, ry - 8);
+        g.fillText('MOUTH', rx + 14, ry - 8);
       }
-      g.font = '600 13px system-ui, sans-serif'; g.textAlign = 'left'; g.fillStyle = 'rgba(0,200,255,1)';
-      g.lineWidth = 3.5; g.strokeStyle = 'rgba(0,0,0,0.75)'; g.strokeText('MOUTH', rx + 14, ry - 8);
-      g.fillText('MOUTH', rx + 14, ry - 8);
-    }
-    g.fillStyle = 'rgba(255,214,10,0.95)';
-    POINTS.forEach((i) => {
-      if (!shown(i)) return;
-      const p = P(i);
-      if (p.v < 0.4) return;
-      g.beginPath(); g.arc(p.x, p.y, 5, 0, Math.PI * 2); g.fill();
-    });
-    if (cust) {
-      [cust.vIdx, ...cust.oIdx].forEach((i) => {
-        if (POINTS.includes(i)) return;   // already drawn above
+      g.fillStyle = 'rgba(255,214,10,0.95)';
+      POINTS.forEach((i) => {
+        if (!shown(i)) return;
         const p = P(i);
         if (p.v < 0.4) return;
         g.beginPath(); g.arc(p.x, p.y, 5, 0, Math.PI * 2); g.fill();

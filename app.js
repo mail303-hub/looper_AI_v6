@@ -78,8 +78,9 @@
     offsetMs: 0,
     prefs: { buf: 2, split: 0.5, cam: null, zoomOn: false, gridOn: false, gridSize: 100, gridInt: 5, gridColor: 'white', auto: false, orient: 'landscape', input: 'mic', slomoFps: SLOMO_DEFAULT, btName: BT_DEFAULT_NAME, fps: FPS_DEFAULT,
       room: '', mqttUrl: Phone.DEFAULT_URL, sndRoom: '', motionThr: MOTION_DEFAULT, sensorThr: MOTION_DEFAULT,
-      poseOn: false, poseLog: false, aiThr: 2.0, aiHand: 'right', poseAngOn: { ls: false, rs: false, le: false, re: false, lw: false, rw: false }, poseAngTarget: 180, poseAngTol: 5, poseShow: { rs: true, ls: true, re: true, le: true, rw: true, lw: true, mouth: true },
-      poseAngCustom: { on: false, p: ['re', 'rw', 'ri'], vertex: 1 },   // free-pick angle: any 3 points, one of them the vertex (index into p)
+      poseOn: false, poseLog: false, aiThr: 2.0, aiHand: 'right', poseAngTarget: 180, poseAngTol: 5,
+      poseShow: { on: true, rs: true, ls: true, re: true, le: true, rw: true, lw: true, mouth: true },   // block: which points are drawn + connected with green lines, and its own on/off
+      poseAng: { on: false, p: ['re', 'rw', 'lw'] },   // block: angle check, any 3 points; the middle one is the vertex the angle is measured at
       motThr: 12, motAng: 35, motSpd: 2, motR: 0.12, motCx: null, motCy: null },   // MOT: change threshold (% in ~50 ms), circle size / centre (share of the camera picture)
     mot: { lastSig: 0 },  // MOT (motion circle) signal lockout
     motPlacing: false,
@@ -172,9 +173,8 @@
     const c = Pose.config, p = S.prefs;
     c.hand = p.aiHand;
     c.show = Object.assign({}, p.poseShow);
-    const pc = p.poseAngCustom || {};
-    c.angle = { on: Object.assign({}, p.poseAngOn), target: p.poseAngTarget, tol: p.poseAngTol,
-      custom: { on: !!pc.on, p: Array.isArray(pc.p) && pc.p.length === 3 ? pc.p.slice() : ['re', 'rw', 'ri'], vertex: [0, 1, 2].includes(pc.vertex) ? pc.vertex : 1 } };
+    const pa = p.poseAng || {};
+    c.angle = { on: !!pa.on, p: Array.isArray(pa.p) && pa.p.length === 3 ? pa.p.slice() : ['re', 'rw', 'lw'], target: p.poseAngTarget, tol: p.poseAngTol };
     c.releaseSpeed = p.aiThr;
     c.interval = p.input === 'ai' ? 33 : 66;          // the release movement is short: sample faster in AI_trig mode
   }
@@ -399,16 +399,14 @@
         d.poseLog = !!p.poseLog;
         if (isFinite(p.aiThr)) d.aiThr = Core.clamp(Math.round(p.aiThr * 10) / 10, 0.5, 4);
         d.aiHand = p.aiHand === 'left' ? 'left' : 'right';
-        if (p.poseAngOn && typeof p.poseAngOn === 'object') ['ls', 'rs', 'le', 're', 'lw', 'rw'].forEach((k) => { if (typeof p.poseAngOn[k] === 'boolean') d.poseAngOn[k] = p.poseAngOn[k]; });
-        if (p.poseAngCustom && typeof p.poseAngCustom === 'object') {
-          const pc = p.poseAngCustom;
-          if (typeof pc.on === 'boolean') d.poseAngCustom.on = pc.on;
-          if (Array.isArray(pc.p) && pc.p.length === 3 && pc.p.every((k) => ANGLE_POINTS.includes(k))) d.poseAngCustom.p = pc.p.slice();
-          if ([0, 1, 2].includes(pc.vertex)) d.poseAngCustom.vertex = pc.vertex;
+        if (p.poseAng && typeof p.poseAng === 'object') {
+          const pa = p.poseAng;
+          if (typeof pa.on === 'boolean') d.poseAng.on = pa.on;
+          if (Array.isArray(pa.p) && pa.p.length === 3 && pa.p.every((k) => ANGLE_POINTS.includes(k))) d.poseAng.p = pa.p.slice();
         }
         if (isFinite(p.poseAngTarget)) d.poseAngTarget = Core.clamp(Math.round(p.poseAngTarget / 5) * 5, 60, 180);
         if (isFinite(p.poseAngTol)) d.poseAngTol = Core.clamp(Math.round(p.poseAngTol), 0, 15);
-        if (p.poseShow && typeof p.poseShow === 'object') ['rs', 'ls', 're', 'le', 'rw', 'lw', 'mouth'].forEach((k) => { if (typeof p.poseShow[k] === 'boolean') d.poseShow[k] = p.poseShow[k]; });
+        if (p.poseShow && typeof p.poseShow === 'object') ['on', 'rs', 'ls', 're', 'le', 'rw', 'lw', 'mouth'].forEach((k) => { if (typeof p.poseShow[k] === 'boolean') d.poseShow[k] = p.poseShow[k]; });
         if (isFinite(p.motThr)) d.motThr = Core.clamp(Math.round(p.motThr * 2) / 2, 1, 40);
         if (isFinite(p.motSpd)) d.motSpd = Core.clamp(Math.round(p.motSpd * 2) / 2, 0.5, 10);
         if (isFinite(p.motAng)) d.motAng = Core.clamp(Math.round(p.motAng / 5) * 5, 5, 80);
@@ -483,12 +481,12 @@
     $('pose-on').checked = p.poseOn;
     $('pose-log-on').checked = p.poseLog;
     ['right', 'left'].forEach((m) => $('ai-h-' + m).classList.toggle('sel', p.aiHand === m));
-    ['ls', 'rs', 'le', 're', 'lw', 'rw'].forEach((k) => $('pa-' + k).classList.toggle('sel', !!p.poseAngOn[k]));
     $('pa-target').value = String(p.poseAngTarget); $('pa-target-text').textContent = p.poseAngTarget + '\u00B0';
     $('pa-tol').value = String(p.poseAngTol); $('pa-tol-text').textContent = p.poseAngTol + '\u00B0';
+    $('ps-on').classList.toggle('sel', !!p.poseShow.on);
     ['ls', 'rs', 'le', 're', 'lw', 'rw', 'mouth'].forEach((k) => $('ps-' + k).classList.toggle('sel', !!p.poseShow[k]));
-    $('pac-on').classList.toggle('sel', !!p.poseAngCustom.on);
-    [0, 1, 2].forEach((i) => { $('pac-p' + i).value = p.poseAngCustom.p[i]; $('pac-v' + i).classList.toggle('sel', p.poseAngCustom.vertex === i); });
+    $('pa-on').classList.toggle('sel', !!p.poseAng.on);
+    [0, 1, 2].forEach((i) => { $('pa-p' + i).value = p.poseAng.p[i]; });
     $('mot-thr').value = String(p.motThr);
     $('mot-thr-text').textContent = p.motThr.toFixed(1) + ' %';
     $('mot-spd').value = String(p.motSpd);
@@ -2641,11 +2639,10 @@
     }
 
     // pose estimation / AI_trig
+    $('ps-on').addEventListener('click', () => { S.prefs.poseShow.on = !S.prefs.poseShow.on; savePrefs(); applyPoseConfig(); refreshSettingsUi(); });
     ['ls', 'rs', 'le', 're', 'lw', 'rw', 'mouth'].forEach((k) => $('ps-' + k).addEventListener('click', () => { S.prefs.poseShow[k] = !S.prefs.poseShow[k]; savePrefs(); applyPoseConfig(); refreshSettingsUi(); }));
-    ['ls', 'rs', 'le', 're', 'lw', 'rw'].forEach((k) => $('pa-' + k).addEventListener('click', () => { S.prefs.poseAngOn[k] = !S.prefs.poseAngOn[k]; savePrefs(); applyPoseConfig(); refreshSettingsUi(); }));
-    $('pac-on').addEventListener('click', () => { S.prefs.poseAngCustom.on = !S.prefs.poseAngCustom.on; savePrefs(); applyPoseConfig(); refreshSettingsUi(); });
-    [0, 1, 2].forEach((i) => $('pac-p' + i).addEventListener('change', (e) => { if (ANGLE_POINTS.includes(e.target.value)) S.prefs.poseAngCustom.p[i] = e.target.value; savePrefs(); applyPoseConfig(); refreshSettingsUi(); }));
-    [0, 1, 2].forEach((i) => $('pac-v' + i).addEventListener('click', () => { S.prefs.poseAngCustom.vertex = i; savePrefs(); applyPoseConfig(); refreshSettingsUi(); }));
+    $('pa-on').addEventListener('click', () => { S.prefs.poseAng.on = !S.prefs.poseAng.on; savePrefs(); applyPoseConfig(); refreshSettingsUi(); });
+    [0, 1, 2].forEach((i) => $('pa-p' + i).addEventListener('change', (e) => { if (ANGLE_POINTS.includes(e.target.value)) S.prefs.poseAng.p[i] = e.target.value; savePrefs(); applyPoseConfig(); refreshSettingsUi(); }));
     $('pa-target').addEventListener('input', (e) => { S.prefs.poseAngTarget = Core.clamp(Math.round((parseFloat(e.target.value) || 180) / 5) * 5, 60, 180); savePrefs(); applyPoseConfig(); refreshSettingsUi(); });
     $('pa-tol').addEventListener('input', (e) => { S.prefs.poseAngTol = Core.clamp(Math.round(parseFloat(e.target.value)), 0, 15) || 0; savePrefs(); applyPoseConfig(); refreshSettingsUi(); });
     $('pose-on').addEventListener('change', (e) => { S.prefs.poseOn = !!e.target.checked; savePrefs(); applyPose(); refreshSettingsUi(); log('pose overlay', S.prefs.poseOn ? 'on' : 'off'); });
